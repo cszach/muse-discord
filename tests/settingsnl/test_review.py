@@ -336,6 +336,9 @@ class LockAndCrashes(Base):
             acts += [[ch("undo", p)], [ch("pause", p)], [ch("resume", p)]]
             acts += [[{"op": "preset", "place": p, "name": n}]
                      for n in ("friends", "Work", "COMMUNITY")]
+        def outbox_empty():
+            with open(self.mod.OUTBOX_FILE) as f:
+                self.assertEqual(json.load(f), [])
         n = 0
         for a in acts:
             probe = {"item": "1", "settings": {"v": 1, "nonce": "a" * 32,
@@ -346,9 +349,13 @@ class LockAndCrashes(Base):
             self.outbox(self.action(m, a))   # raises if anything escapes
             self.assertIn(m["id"], self.st["replied_to"], a)
             n += 1
+            if n % 60 == 0:
+                # A fresh monitor now and then: the state files grow
+                # with every item and rewriting them is what is slow.
+                outbox_empty()
+                self.setUp()
         self.assertGreater(n, 300)
-        with open(self.mod.OUTBOX_FILE) as f:
-            self.assertEqual(json.load(f), [])
+        outbox_empty()
 
 
 if __name__ == "__main__":

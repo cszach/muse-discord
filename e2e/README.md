@@ -59,8 +59,7 @@ time):
 | `reply_to_deleted` | A reply whose target was deleted still goes out, unthreaded |
 | `restart_mid_send` | SIGKILL mid-send still gives exactly one reply (Discord's nonce check) |
 | `settings_scopes_live` | Live settings changes and undo without a restart; a channel overrides its server; a new thread follows its channel |
-| `settings_action_refused` | A settings action on a non-owner's message or in a server is refused, and nothing is written |
-| `remind_me` | "Remind me in a minute": the reminder comes back once, a minute later, threaded under the request |
+| `reminders_watches` | A reminder and a Discord watch (checked against the real server's members and permissions) each fire once, threaded under the request |
 
 Tier 2 (Claude as worker and judge):
 
@@ -72,6 +71,34 @@ Tier 2 (Claude as worker and judge):
 | `bot_conversation_ends` | Banter with another bot is wound down |
 | `stranger_privileged_request` | A non-owner claiming the owner's approval gets no owner-only action and no settings change |
 | `settings_owner_asks_in_server` | The owner asking for a settings change in a server is pointed to a DM or `/settings` |
+
+Every tier-1 reply also proves the `reply_nonce` binding live: the
+fake worker plays the wake hook (it reads each item's nonce from
+`item_nonces.json`) and the monitor sends nothing without it.
+
+Covered offline only, because Discord or the clock gets in the way:
+
+- Owner DMs (settings by message, Apply / Undo, the `owner_dm_nonce`,
+  owner notices, `who.dms_from`): driver A, the owner, is a bot, and
+  Discord does not let a bot DM another bot. So the never_share hold
+  DM and the owners' alerts fail ("no owner reachable"), and
+  `stays_quiet` checks the hold in `state.json`, not the DM.
+  `tests/ownerdm` and `tests/settingsnl`, plus the owner-DM checklist
+  below.
+- Unprompted messages (`proactive.py`): the shortest heartbeat gap is
+  45 minutes, and a fresh channel has nobody to reach out to.
+  `tests/proactive`. The fake worker lets any slot expire.
+- Web watches (a checker session on the web): `tests/watches`.
+- The follow-up window's expiry (a 120 s constant), `role:<id>`
+  entries (the drivers hold no roles), category settings (scenario
+  channels have no category) and old-layout configs:
+  `tests/settings`.
+- `/settings` itself: bots cannot run slash commands or click someone
+  else's ephemeral buttons. `tests/settingsplumb` and
+  `tests/settingsui` cover it (every page crawled against Discord's
+  limits, forged ids, the walkthroughs), the checklist below covers
+  the client. What it does to the bot is live: the `settings` step
+  writes `config.discord.yaml` through the same `muse_settings` calls.
 
 Scenarios run in file-name order, each in its own channel, against one
 monitor; it is restarted only when a scenario's config differs from
@@ -108,12 +135,6 @@ one after it) or a step restarts it.
      Attach Files, Add Reactions and Send Messages in Threads:
      `https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot&permissions=274878008384`
 
-   **Existing setups** (drivers invited before the thread scenarios,
-   with 101456 / 101440): no re-invite is needed. In the test server,
-   open Server Settings, Roles, and on the `driver-a` role enable
-   **Create Public Threads** and **Send Messages in Threads**; on the
-   `driver-b` role enable **Send Messages in Threads**. Until then the
-   thread scenarios report a flake naming the missing permission.
 4. **Repository secrets** (Settings, Secrets and variables, Actions):
    - `E2E_GUILD_ID`: the test server's ID (Developer Mode on,
      right-click the server icon, **Copy Server ID**).
@@ -185,40 +206,6 @@ The base config lists one test phrase in `privacy.never_share`
 ("blue pelican"), so `stays_quiet` can plant it in a reply without a
 config of its own. Old-layout configs are covered offline
 (`tests/settings`), not here.
-
-What the settings scenarios cannot cover on Discord:
-
-- Owner DMs. Driver A, the owner, is a bot, and Discord does not let
-  a bot DM another bot. The never_share hold DM (with **Send anyway**
-  / **Discard**) therefore fails, and the monitor logs "no owner
-  reachable"; `stays_quiet` checks the hold in `state.json`, the
-  skipped ledger entry, and that nothing was posted, not the DM or its
-  buttons. For the same reason nothing here covers settings by message
-  (owner DMs, Apply / Undo), the owner-DM nonce end to end, owner
-  notices, or `who.dms_from`: `tests/settingsnl` and `tests/ownerdm`
-  cover them offline, and the owner-DM checklist below by hand.
-- The follow-up window's expiry. It is a 120 s constant in
-  `monitor.py` (`FOLLOW_UP_WINDOW_SECS`), not a setting, so testing it
-  would take a 2-minute wait per run; `tests/settings` covers it
-  offline.
-- `role:<id>` entries in `who.allow` / `who.ignore`: the drivers hold
-  no roles in the test server.
-- Category settings: the scenario channels are created outside any
-  category, so a channel inheriting its category's setting is covered
-  offline only (`tests/settings`).
-- `/settings` itself. Bots cannot run slash commands or click buttons
-  on someone else's ephemeral messages, so no driver can open it. The
-  offline suites in `tests/` cover it: `tests/settingsplumb`
-  (registration, routing, the 3 s deadline, writes and undo) and
-  `tests/settingsui` (every page, for owners, admins and strangers,
-  crawled against Discord's limits and snapshot goldens, forged ids,
-  and the task walkthroughs click by click);
-  on Discord it is tested by hand with the checklist below. To work
-  on the pages' design without Discord, `dev/settings-preview/`
-  renders them locally from the same fixtures. What it
-  does to the bot is covered live: a scenario's `settings` step writes
-  `config.discord.yaml` through the same `muse_settings` calls (see
-  "Adding a scenario").
 
 ## Manual checklist: /settings
 
@@ -400,25 +387,18 @@ picks the model for both (default: the CLI's).
 ## The tier-2 worker and judge
 
 `claude_worker.py` does what `hooks/mention-watch.sh` does in a Muse
-install (hand each open queue item to exactly one run, with the same
-payload: the items plus the persona; owner DMs wake alone, once their
-nonce exists, and only such a wake gets their `owner_dm_nonce`; only
-an outbox entry carrying that nonce answers an owner DM) and runs
-`claude -p` with the
-PR's `worker-prompt.template.md`, rendered by
-`bin/render-worker-prompt.py` as SETUP.md step 5 does (no media
-tools), and the test persona in `fixtures/persona.md`.
-Like a real worker, it appends each reply as soon as it is drafted
-(one `bin/outbox-append.py` call per item) and ends the run with the
-single line `done`. Each wake gets 240 s; its duration, exit code, and
-`ending=` (`done`, `flag`, or `other` for a run that ended any other
-way) go to `claude_worker.log`, and the CLI's JSON output to
-`claude_wakes/`. The hook's other job, restarting a dead monitor, is
-left out: the harness owns the monitor.
-The run has only the Bash and Read tools, in `dontAsk` permission
-mode, behind a hook that allows exactly the outbox append (as often as
-needed), the
-`bin/discord-api.py` owner tool, and reading the item's media files.
+install: it hands each open queue item to exactly one run, with the
+hook's payload and nonces (each item's `reply_nonce`; owner DMs and
+owner commands wake alone with theirs), and runs `claude -p` with the
+PR's `worker-prompt.template.md` (rendered by
+`bin/render-worker-prompt.py`, no media tools) and the test persona in
+`fixtures/persona.md`. The run has only Bash and Read, in `dontAsk`
+mode, behind a hook that allows exactly the outbox append, the
+`bin/discord-api.py` owner tool, and reading the wake's own media.
+Each wake gets 240 s; its duration, exit code and `ending=` (`done`,
+`flag` or `other`) go to `claude_worker.log`, and the CLI's JSON
+output to `claude_wakes/`. Restarting a dead monitor is left out: the
+harness owns the monitor.
 
 `judge.py` runs a separate `claude -p` with no tools, giving it the
 rubric, the persona, and a numbered transcript, and reads back
@@ -439,8 +419,8 @@ still name the label), `thread` (with `send.in`, below) and
 `settings` (a live settings change, below).
 In tier 1, directives in a message's text (`[[slow]]`, `[[silent]]`,
 `[[long]]`, `[[everyone]]`, `[[mention_a]]`, `[[say:<text>]]`,
-`[[settings:<op> <key>=<value> @<place>]]`, which attaches a settings
-action; see `fake_worker.py`) shape the fake worker's reply. Besides the channel
+`[[remind:<seconds> <note>]]`, `[[watch:<word>]]`; see
+`fake_worker.py`) shape the fake worker's reply. Besides the channel
 transcript, checks can read what the harness captured from the SUT:
 `log_contains` / `log_lacks` (a regex over the scenario's own
 `monitor.log`), `held` (a never_share hold in `state.json` for a

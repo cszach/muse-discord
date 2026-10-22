@@ -16,8 +16,9 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "_lib"))
 
-# scenario -> seconds of main() it runs
-SCENARIOS = {"slow": 13, "sweep": 12, "hung": 6, "outbox": 7}
+# scenario -> seconds of main() at most (each stops once it has seen
+# enough, see run_fast.py)
+SCENARIOS = {"slow": 20, "sweep": 20, "hung": 10, "outbox": 10}
 _procs = {}
 _results = {}
 
@@ -70,9 +71,9 @@ def polls_by_channel(r):
 
 class Scenarios(unittest.TestCase):
     def test_slow_rest_never_blocks_the_loop(self):
-        """15 channels, every read 0.25s (a slow proxy): gateway messages
+        """15 channels, every read 0.15s (a slow proxy): gateway messages
         are staged at once, the loop is never blocked long, and every
-        channel is still polled about every POLL_INTERVAL (5s here)."""
+        channel is still polled about every POLL_INTERVAL (3s here)."""
         r = run("slow")
         st = staged_at(r)
         self.assertEqual(len(r["put"]), 4, r["out"][-2000:])
@@ -85,7 +86,7 @@ class Scenarios(unittest.TestCase):
         self.assertEqual(len(polls), 15)
         for cid, ts in polls.items():
             self.assertGreaterEqual(len(ts), 2, (cid, ts))
-            self.assertLess(ts[1] - ts[0], 5 + 3, (cid, ts))
+            self.assertLess(ts[1] - ts[0], 3 + 3, (cid, ts))
 
     def test_sweep_recovers_and_loop_stays_responsive(self):
         r = run("sweep")
@@ -107,7 +108,7 @@ class Scenarios(unittest.TestCase):
         (mid, t), = r["put"]
         st = staged_at(r)
         self.assertIn(mid, st, r["out"])
-        self.assertLess(st[mid] - t, 2 + 1.5)
+        self.assertLess(st[mid] - t, 1 + 1.5)  # READ_TIMEOUT_SECS + 1.5
 
     def test_outbox_written_mid_wait_is_sent_promptly(self):
         r = run("outbox")

@@ -47,8 +47,7 @@ LABEL_RE = re.compile(r"^[a-z0-9_]+$")
 DRIVERS = ("a", "b")
 STEPS = ("send", "wait", "wait_for", "action", "converse", "delete",
          "thread", "settings")
-ACTIONS = ("kill_monitor", "start_monitor", "restart_monitor",
-           "gateway_off", "gateway_on")
+ACTIONS = ("kill_monitor", "start_monitor", "gateway_off")
 LEDGER_STATUSES = ("queued", "replied", "quarantined", "skipped")
 # send.reply_to may name the SUT's newest message instead of a label.
 LAST_SUT = "last_sut"
@@ -684,12 +683,6 @@ def validate(sc, source=None, fixtures_dir=None):
     elif "judge" in sc:
         _fail(f"{name}: judge", "only tier-2 scenarios are judged")
     return sc
-
-
-def labels_of(sc):
-    """The labels a scenario's send steps define, in order."""
-    return [s["send"]["label"] for s in sc["steps"]
-            if isinstance(s, dict) and "send" in s and "label" in s["send"]]
 
 
 def load_file(path, fixtures_dir=None):

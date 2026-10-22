@@ -3,12 +3,13 @@ reminder comes back once, on time, to its requester only, in the place
 it was asked, also after a restart (and once, marked late, after
 downtime); a schedule action is bound to the queue item's author and
 channel, so a forged one (another person, another channel, a message
-that is not queued) is refused; Discord watches never see a channel the
-requester cannot read, never their own messages, and debounce; caps,
-the who setting, cancel, expiry, and owner-DM nonce binding.
+that is not queued) is refused; a web watch needs its item's web_nonce;
+Discord watches never see a channel the requester cannot read, never
+their own messages, and debounce; caps, the who setting, cancel,
+expiry, and owner-DM nonce binding.
 
 Drives enqueue_message, process_outbox and watch_tick with the queue
-file, watches.json and the stubbed API; one test runs the real wake
+file, watches.json and the stubbed API; two tests run the real wake
 hook.
 
 Usage: [MUT_DIR=<tree>] python3 tests/watches/test_watches.py"""
@@ -368,6 +369,42 @@ class Forgery(Base):
         self.outbox(self.reply(own, web, web_nonce=self.st["web_nonces"][
             own["id"]]["nonce"]))
         self.assertEqual(len(self.items()), 1, self.out)
+
+    def test_owner_server_message_holds_both_nonces(self):
+        """An owner's server message that may set web watches holds an
+        owner_command_nonce and a web_nonce; the wake hook hands both to
+        one wake holding nothing else."""
+        own, _ = self.ask(OWNER, "<@bot> pin that, and watch the page")
+        other, _ = self.ask(U1, "<@bot> hi")
+        with open(self.mod.OWNER_ITEMS_FILE) as f:
+            cmds = {k: v["nonce"] for k, v in json.load(f).items()}
+        with open(self.mod.WEB_NONCES_FILE) as f:
+            web = json.load(f)
+        self.assertEqual(list(cmds), [own["id"]])
+        self.assertIn(own["id"], web)
+        self.assertNotEqual(cmds[own["id"]], web[own["id"]])
+        if not shutil.which("jq"):
+            return
+        d = scratch("muse-watch-bound-")
+        env = dict(os.environ, HATCH_HOOK_RUNTIME=HOOK_RUNTIME,
+                   HOOK_STATE=os.path.join(d, "hookstate.json"),
+                   MUSE_DISCORD_DIR=self.mod.tmp,
+                   MUSE_DISCORD_CONFIG=self.mod.cfg_path)
+
+        def wake():
+            r = subprocess.run(["bash", HOOK], env=env, text=True,
+                               capture_output=True, timeout=30)
+            lines = r.stdout.splitlines()
+            return r.stdout, (json.loads(lines[1])["items"] if lines
+                              and lines[0].startswith("WAKE:") else None)
+        out, items = wake()
+        self.assertEqual([(i["message_id"], i.get("owner_command_nonce"),
+                           i.get("web_nonce")) for i in items],
+                         [(own["id"], cmds[own["id"]], web[own["id"]])])
+        out, items = wake()
+        self.assertEqual([i["message_id"] for i in items], [other["id"]])
+        for n in (cmds[own["id"]], web[own["id"]]):
+            self.assertNotIn(n, out)
 
     def test_bot_cannot_set(self):
         m = gmsg("333000000000000001", "<@bot> remind me", mention=True,

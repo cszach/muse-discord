@@ -3,18 +3,18 @@ queued item's channel, but not to the run that was handed that item.
 Each test asserts the secure behaviour (it failed on the branch as
 reviewed). self.reply() is the run holding the item (with its
 reply_nonce); a run that was not handed it writes reply_nonce=None.
+Repros tested elsewhere: reply_to borrowing another item
+(test_replies_bound), a forged entry hiding an owner command from the
+hook (test_hook), lookups without a nonce (test_discord_api).
 
 Usage: [MUT_DIR=<tree>] python3 tests/ownerdm/test_review_i.py"""
 import json
 import os
-import shutil
-import subprocess
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import test_binding as tb  # noqa: E402
-from common import HOOK_RUNTIME  # noqa: E402
 from settings_harness import (CH, CH_G2, G1, G2, OWNER, U2,  # noqa: E402
                               bump, dmsg, gmsg, sf, write)
 
@@ -60,36 +60,21 @@ class StrangerRunAnswersOthersItems(_R):
                                reply_nonce=None))
         self.assertEqual(self.sends(CH), [], self.out)
 
-    def test_settles_owner_command_via_reply_to_under_own_item(self):
-        """item = the stranger's own, reply_to = the owner's command:
-        _settle adds reply_to to replied_to, so the owner's real reply is
-        then dropped as a duplicate."""
-        own = self.owner_cmd()
-        s = self.stranger_mention()
-        self.outbox(dict(self.reply(s, "hi"), reply_to=own["id"]))
-        self.outbox(self.reply(own, "Pinned."))
-        self.assertIn("Pinned.", [x["content"] for x in self.sends(CH)],
-                      self.out)
-
-    def test_posts_into_someone_elses_dm_under_their_open_item(self):
-        """U2's DM is queued (open). A stranger's run in a public channel
-        posts into U2's DM (PROTOCOL: 'no run can post into ... someone's
-        DM ... under a made-up or borrowed item')."""
+    def test_posts_under_someone_elses_open_item(self):
+        """Into U2's open DM, or another server's channel (PROTOCOL: 'no
+        run can post into ... someone's DM ... under a made-up or
+        borrowed item')."""
         u2 = self.queue(dmsg(U2, "private: my address is ...",
                              channel=DM_U2))
-        self.stranger_mention()
-        self.outbox({"item": u2["id"], "channel_id": DM_U2,
-                     "text": "click http://evil.example/login"})
-        self.assertEqual(self.sends(DM_U2), [], self.out)
-
-    def test_posts_into_another_servers_channel_under_its_open_item(self):
         other = self.queue(gmsg(U2, "<@bot> hey", mention=True,
                                 channel=CH_G2, guild=G2), dm=False,
                            guild=G2)
         self.stranger_mention()
-        self.outbox({"item": other["id"], "channel_id": CH_G2,
-                     "text": "@here injected"})
-        self.assertEqual(self.sends(CH_G2), [], self.out)
+        for it in (u2, other):
+            cid = it["channel_id"]
+            self.outbox({"item": it["id"], "channel_id": cid,
+                         "text": "click http://evil.example/login"})
+            self.assertEqual(self.sends(cid), [], self.out)
 
 
 class ReAnswerAfterRepliedToEviction(_R):
@@ -136,73 +121,6 @@ class QueueFileHoldsEveryonesPrivateText(_R):
             text = f.read()
         leaked = [s for s in ("falcon42", "1 Secret Rd") if s in text]
         self.assertFalse(ok and leaked, leaked)
-
-
-@unittest.skipUnless(shutil.which("jq"), "jq not installed")
-class HookCountsForgedOwnerCommandAnswers(_R):
-    """The hook counts any outbox entry naming an owner command as its
-    answer (it does that check only for owner DMs), so a stranger's
-    forged entry keeps the owner's command from ever waking."""
-
-    def test_forged_entry_hides_owner_command(self):
-        env = dict(os.environ, HATCH_HOOK_RUNTIME=HOOK_RUNTIME,
-                   HOOK_STATE=os.path.join(self.mod.tmp, "hook.json"),
-                   MUSE_DISCORD_DIR=self.mod.tmp,
-                   MUSE_DISCORD_CONFIG=self.mod.cfg_path)
-        s = self.stranger_mention()
-
-        def wake():
-            r = subprocess.run(["bash", tb.HOOK], env=env, text=True,
-                               capture_output=True, timeout=30)
-            lines = r.stdout.splitlines()
-            return [i["message_id"] for i in json.loads(lines[1])["items"]] \
-                if lines and lines[0].startswith("WAKE:") else None
-        self.assertEqual(wake(), [s["id"]])
-        # The stranger's run: an owner command arrives while it works,
-        # and it writes a silent entry for it (the monitor has not
-        # processed the outbox yet).
-        own = self.owner_cmd()
-        with open(self.mod.OUTBOX_FILE, "w") as f:
-            json.dump([{"item": own["id"], "channel_id": CH,
-                        "silent": True}], f)
-        self.assertEqual(wake(), [own["id"]])
-
-
-class UngatedLookupsLeakPrivateNames(unittest.TestCase):
-    """resolve-channel and list-threads need no owner command: any run
-    lists every channel name of ANY server the bot is in (private ones
-    and servers the asker is not in: Discord's /guilds/<id>/channels
-    returns them all), and every active thread under any parent,
-    private threads included."""
-
-    def test_no_nonce_lists_a_private_channel_name(self):
-        from common import scratch
-        import test_hook as th
-        d = th.load_discord_api(scratch("muse-review-i-"))
-
-        def api(method, path, data=None):
-            d.calls.append((method, path))
-            if path.endswith("/channels"):
-                return [{"id": "1", "name": "general", "type": 0},
-                        {"id": "2", "name": "layoffs-q4-private",
-                         "type": 0, "permission_overwrites": [
-                             {"id": G2, "type": 0, "deny": "1024"}]}]
-            return {"threads": [{"id": "3", "parent_id": CH_G2,
-                                 "type": 12, "name": "hr-complaint-bob",
-                                 "owner_id": "4"}]}
-        d.api = api
-        import contextlib
-        import io
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            for args in (["resolve-channel", G2, "nope"],
-                         ["list-threads", G2, CH_G2]):
-                try:
-                    d.main(["discord-api.py", *args])
-                except SystemExit as e:
-                    buf.write(str(e))
-        self.assertNotIn("layoffs-q4-private", buf.getvalue())
-        self.assertNotIn("hr-complaint-bob", buf.getvalue())
 
 
 class UnhashableHoldRaises(_R):

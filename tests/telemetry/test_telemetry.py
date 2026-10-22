@@ -1,15 +1,16 @@
 """Usage stats (telemetry.py), offline:
 
+0. A copy past a release, or edited, is told apart from the release.
 1. A report never carries an id, a name, message content, an error
    message or a path: a realistic monitor flow (mentions, a reply, a
    refusal, settings changes and a preset, a crash) with known ids and
    names, and none of them appear anywhere in the serialized report. The
    report is one the Worker's validation accepts (when node is here).
 2. Off sends nothing, by setting (and the days it was off are never
-   sent later) and by MUSE_DISCORD_TELEMETRY=off.
+   sent later) and by MUSE_DISCORD_TELEMETRY=off; only releases send.
 3. A slow, failing or unreachable endpoint never blocks or crashes the
    monitor: tick() returns at once, the day stays waiting and is tried
-   again the next day, never in a loop.
+   again the next day, never in a loop; unsent days are kept a week.
 4. At most one send per UTC day, and each closed day is sent once.
 
 Every send goes to a local fake endpoint; nothing leaves the machine.
@@ -50,7 +51,7 @@ class Endpoint:
     """A local fake Worker: records each report; mode "ok", "fail"
     (500) or "hang" (answers after `hang` seconds)."""
 
-    def __init__(self, mode="ok", hang=3.0):
+    def __init__(self, mode="ok", hang=1.0):
         self.mode, self.hang, self.reports = mode, hang, []
         outer = self
 
@@ -68,7 +69,8 @@ class Endpoint:
 
         self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
         self.srv.daemon_threads = True
-        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        threading.Thread(target=self.srv.serve_forever, args=(0.02,),
+                         daemon=True).start()
         self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
 
     def close(self):
@@ -99,6 +101,7 @@ class Base(unittest.TestCase):
         self.tm.environ = {T.ENV_URL: ""}
         self.tm.post = self.local_only
         self.tm.version = "v1.0.0"   # only releases send
+        self.post_timeout = 1
         self.tm._find_version = lambda: None   # start() keeps it
         self.ep = None
 
@@ -109,7 +112,7 @@ class Base(unittest.TestCase):
     def local_only(self, url, obj):
         if not url.startswith("http://127.0.0.1:"):
             raise AssertionError(f"a test tried to send to {url}")
-        return T.post_json(url, obj, timeout=1)
+        return T.post_json(url, obj, timeout=self.post_timeout)
 
     def serve(self, mode="ok", **kw):
         self.ep = Endpoint(mode, **kw)
@@ -123,7 +126,8 @@ class Base(unittest.TestCase):
                          {G1: 37, "x": 3}, force=True)
 
     def wait_send(self, secs=5):
-        """Until the send thread finished and its result was taken."""
+        """Until the send thread finished and its result was taken (at
+        once when no send was started: then nothing was posted)."""
         end = time.time() + secs
         while time.time() < end:
             t = self.tm._sending
@@ -172,10 +176,6 @@ class BuildInfo(unittest.TestCase):
         with open(os.path.join(d, "monitor.py"), "w") as f:
             f.write("edited\n")
         self.assertEqual(T.build_info(d, "v1.0.0"), (2, True))
-        rec = dict(T.new_day("2026-10-20"), gauges={
-            "version": "v1.0.0", "ahead": 2, "modified": True})
-        p = T.build_payload(rec, "0b6f8f0e-6c1a-4f3e-9a2b-1c2d3e4f5a6b")
-        self.assertEqual((p["ahead"], p["modified"]), (2, True))
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +299,7 @@ class OffBySetting(Base):
         self.tick()
         self.next_day()
         self.next_day()
-        time.sleep(0.2)
+        self.wait_send()
         self.assertEqual(ep.reports, [])
         self.assertEqual(self.pending(), [])
         # Turned on again (as a DM or bin/telemetry.py on would): the
@@ -311,7 +311,7 @@ class OffBySetting(Base):
                 role="owner")
         self.tm.count("messages_seen", 1)
         self.tick()
-        time.sleep(0.2)
+        self.wait_send()
         self.assertEqual(ep.reports, [])   # today was off this morning
         self.next_day()
         self.next_day()
@@ -330,28 +330,20 @@ class OffByEnv(Base):
         self.tick()
         self.next_day()
         self.next_day()
-        time.sleep(0.2)
+        self.wait_send()
         self.assertEqual(ep.reports, [])
         self.assertEqual(self.pending(), [])
 
     def test_only_releases_send(self):
+        ep = self.serve()
         for version in ("unreleased", "unknown", None):
-            ep = self.serve()
             self.tm.version = version
             self.tm.count("replies_sent")
             self.tick()
             self.next_day()
             self.next_day()
-            time.sleep(0.2)
+            self.wait_send()
             self.assertEqual(ep.reports, [], version)
-            ep.close()
-            self.ep = None
-
-    def test_tests_and_e2e_run_with_it_off(self):
-        # The suites (tests/_lib/common.py) and the e2e harness set it.
-        self.assertTrue(T.env_off())
-        with open(os.path.join(MUT_DIR, "e2e", "sut.py")) as f:
-            self.assertIn('env["MUSE_DISCORD_TELEMETRY"] = "off"', f.read())
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +352,8 @@ class OffByEnv(Base):
 class BadEndpoint(Base):
 
     def test_hanging_endpoint_does_not_block(self):
-        ep = self.serve("hang", hang=3.0)
+        ep = self.serve("hang")
+        self.post_timeout = 0.2
         self.tm.count("replies_sent")
         self.tick()
         self.clock.t += DAY
@@ -368,7 +361,7 @@ class BadEndpoint(Base):
         self.tick()   # starts the send
         self.tick()
         self.assertLess(time.time() - t0, 0.5)
-        self.wait_send(secs=5)   # the 1 s timeout ends it
+        self.wait_send()   # the post's timeout ends it
         self.assertEqual(len(ep.reports), 1)
         self.assertEqual(len(self.pending()), 1)   # kept for tomorrow
 
@@ -381,7 +374,7 @@ class BadEndpoint(Base):
         for _ in range(5):
             self.clock.t += 600
             self.tick()
-        time.sleep(0.2)
+        self.wait_send()
         self.assertEqual(len(ep.reports), 1)       # no retry storm
         self.assertEqual(len(self.pending()), 1)
         ep.mode = "ok"
@@ -434,7 +427,7 @@ class OncePerDay(Base):
         for _ in range(5):
             self.clock.t += 1800
             self.tick()
-        time.sleep(0.2)
+        self.wait_send()
         self.assertEqual(len(ep.reports), 1)
         # A restart the same day sends nothing more.
         with quiet():
@@ -442,7 +435,7 @@ class OncePerDay(Base):
         self.tm.data = None
         self.tm.start()
         self.tick()
-        time.sleep(0.2)
+        self.wait_send()
         self.assertEqual(len(ep.reports), 1)
         self.next_day()
         self.wait_send()

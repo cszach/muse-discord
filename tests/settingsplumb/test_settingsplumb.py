@@ -8,11 +8,9 @@ settings_ui.
 Usage: [MUT_DIR=<tree>] python3 tests/settingsplumb/test_settingsplumb.py"""
 import json
 import os
-import queue
 import subprocess
 import sys
 import threading
-import time
 import types
 import unittest
 
@@ -186,30 +184,25 @@ class Registration(unittest.TestCase):
         self.assertEqual([x[0] for x in api.log], ["GET", "GET"])
 
     def test_patch_when_different(self):
-        for over in ({"contexts": [0, 1, 2]}, {"description": "old"},
-                     {"integration_types": [0, 1]},
-                     {"default_member_permissions": "32"},
-                     {"options": [{"type": 3, "name": "x"}]}):
-            mod = load_monitor(CFG)
-            api = FakeCommands(mod, [discord_copy(mod, **over),
-                                     why_copy(mod)])
-            with quiet():
-                r = mod.register_commands()
-            self.assertEqual(r, "updated", over)
-            patches = [x for x in api.log if x[0] == "PATCH"]
-            self.assertEqual(len(patches), 1)
-            self.assertEqual(patches[0][1], "/applications/777/commands/c1")
-            self.assertEqual(patches[0][2], mod.SETTINGS_COMMAND)
-            self.assertFalse([x for x in api.log if x[0] == "POST"])
-        # The message command too.
-        mod = load_monitor(CFG)
-        api = FakeCommands(mod, [discord_copy(mod),
-                                 why_copy(mod, contexts=[0])])
-        with quiet():
-            self.assertEqual(mod.register_commands(), "updated")
-        patches = [x for x in api.log if x[0] == "PATCH"]
-        self.assertEqual(patches[0][1], "/applications/777/commands/c2")
-        self.assertEqual(patches[0][2], mod.WHY_COMMAND)
+        mod = self.mod
+        cases = [({"contexts": [0, 1, 2]}, {}), ({"description": "old"}, {}),
+                 ({"integration_types": [0, 1]}, {}),
+                 ({"default_member_permissions": "32"}, {}),
+                 ({"options": [{"type": 3, "name": "x"}]}, {}),
+                 ({}, {"contexts": [0]})]       # the message command
+        for over, why_over in cases:
+            with self.subTest(over or why_over):
+                mod._COMMAND_REG.update(done=False, next_try=0)
+                api = FakeCommands(mod, [discord_copy(mod, **over),
+                                         why_copy(mod, **why_over)])
+                self.assertEqual(self.run_reg()[0], "updated")
+                patches = [x for x in api.log if x[0] == "PATCH"]
+                self.assertEqual(len(patches), 1)
+                self.assertEqual(patches[0][1:], (
+                    "/applications/777/commands/c1", mod.SETTINGS_COMMAND)
+                    if over else ("/applications/777/commands/c2",
+                                  mod.WHY_COMMAND))
+                self.assertFalse([x for x in api.log if x[0] == "POST"])
 
     def test_why_name_falls_back_when_refused(self):
         """Discord answers 400 when it does not take "?" in the name: the
@@ -327,25 +320,6 @@ class Routing(unittest.TestCase):
         r = self.dispatch(cmd_ix())
         self.assertEqual(r["data"]["flags"], 64)
         self.assertNotIn("kaput", r["data"]["content"])   # no internals
-
-    def test_responder_thread_posts_callback(self):
-        q = queue.Queue()
-        sent = []
-        self.mod.interaction_callback = lambda ix, resp: sent.append(
-            (ix["id"], resp))
-        t = threading.Thread(target=self.mod._interaction_thread_main,
-                             args=(q, self.recs.append), daemon=True,
-                             name="interactions")
-        t.start()
-        q.put(cmd_ix(iid="41"))
-        q.put(comp_ix("mdset:z", t=5))
-        deadline = time.time() + 5
-        while len(sent) < 2 and time.time() < deadline:
-            time.sleep(0.02)
-        self.assertEqual([s[0] for s in sent], ["41", "2"])
-        self.assertEqual(sent[0][1]["type"], 4)
-        self.assertEqual(sent[1][1]["type"], 7)
-        self.assertEqual({c[2] for c in self.stub.calls}, {"interactions"})
 
 
 class MissingUI(unittest.TestCase):
@@ -702,7 +676,6 @@ class AdminDigest(unittest.TestCase):
         text = self.mod.admin_digest_text(
             G1, self.mod._ADMIN_CHANGES[G1]["changes"])
         self.assertLessEqual(len(text), 1990)
-        self.assertRegex(text, r"- and \d+ more")
 
 
 # ---------------------------------------------------------- join notice

@@ -1,6 +1,8 @@
 """Run monitor.main() offline for one fast-loop scenario (in its own
-process, under an alarm) and print a JSON result on the last line.
-Usage: run_fast.py <scenario> <seconds>   (MUT_DIR = the code under test)"""
+process) and print a JSON result on the last line. main() stops once
+the scenario's `until` holds (checked at the end of each loop pass), or
+at the alarm. Usage: run_fast.py <scenario> <seconds>   (MUT_DIR = the
+code under test)"""
 import contextlib
 import http.server
 import io
@@ -105,6 +107,7 @@ mod.api_post = post
 mod.api.routes["/users/@me"] = {"id": BOT, "username": "musebot"}
 
 gw_script = []  # [(at_secs, item or callable)]
+until = None    # () -> True once the scenario has seen enough
 
 
 PROBE = {"on": False}
@@ -160,6 +163,21 @@ def typing(cid, uid):
     return {"_typing": {"channel_id": cid, "user_id": uid}}
 
 
+def all_staged():
+    """Every message in gw_script delivered and staged."""
+    staged = {mid for mid, _t in rec["staged"]}
+    return len(rec["put"]) == len(gw_script) \
+        and all(mid in staged for mid, _t in rec["put"])
+
+
+def polled_twice(chans):
+    n = {}
+    for path, _t in rec["gets"]:
+        if "/messages?limit=100" in path:
+            n[path.split("/")[2]] = n.get(path.split("/")[2], 0) + 1
+    return all(n.get(c, 0) >= 2 for c in chans)
+
+
 def lazy(fn):
     """A gateway item built at delivery time (fresh snowflake)."""
     def put(inbox, status):
@@ -172,14 +190,17 @@ def lazy(fn):
 
 
 if scenario == "slow":
-    # 15 channels, every channel read sleeps 0.25s: a rotation takes ~4s.
+    # 15 channels, every channel read sleeps 0.15s: a rotation takes
+    # ~2.5s. Messages arrive during the catch-up rotation, at its end,
+    # during the second and after it.
     chans = {f"C{i:02d}": chan(f"c{i}") for i in range(15)}
     setup(chans)
-    SLOW["secs"] = 0.25
-    mod.POLL_INTERVAL = 5
+    SLOW["secs"] = 0.15
+    mod.POLL_INTERVAL = 3
     PROBE["on"] = True
-    gw_script += [(2, lazy(dm)), (4, lazy(lambda: mention("C05"))),
-                  (7, lazy(dm)), (10, lazy(lambda: mention("C14")))]
+    gw_script += [(1.2, lazy(dm)), (2.7, lazy(lambda: mention("C05"))),
+                  (4.2, lazy(dm)), (6.2, lazy(lambda: mention("C14")))]
+    until = lambda: all_staged() and polled_twice(chans)  # noqa: E731
 elif scenario == "sweep":
     # The sweep pass runs every cycle alongside the poll, both sliced;
     # a mention the poll never saw (below its watermark) is recovered.
@@ -189,12 +210,19 @@ elif scenario == "sweep":
     setup(chans, {**{c: "1" for c in chans}, "C19": H.sf(0)})
     rec["lost"] = lost["id"]
     SLOW["secs"] = 0.1
-    mod.POLL_INTERVAL = 4
+    mod.POLL_INTERVAL = 3
     PROBE["on"] = True
     mod.SWEEP_EVERY_CYCLES = 1
-    gw_script += [(4, lazy(lambda: mention("C07"))),
-                  (6, lazy(lambda: mention("C08"))),
-                  (8, lazy(lambda: mention("C09")))]
+    gw_script += [(2.5, lazy(lambda: mention("C07"))),
+                  (3.5, lazy(lambda: mention("C08"))),
+                  (5, lazy(lambda: mention("C09")))]
+
+    def swept_all():
+        return len({p.split("/")[2] for p, _ in rec["gets"]
+                    if p.endswith("?limit=20")} - {"DM1"}) >= len(chans)
+    until = lambda: (  # noqa: E731
+        any(m == lost["id"] and ok for m, _t, ok in rec["enqueued"])
+        and all_staged() and swept_all() and polled_twice(chans))
 elif scenario == "outbox":
     setup({"500": chan()})
     rec["outbox_written"] = []
@@ -210,7 +238,10 @@ elif scenario == "outbox":
                 "text": "hello"})], f)
         os.replace(tmp, mod.OUTBOX_FILE)
         rec["outbox_written"].append(rel(time.time()))
-    gw_script += [(3.1, write_outbox), (5.37, write_outbox)]
+    # Both land mid-wait (the idle loop waits in 2 s ticks).
+    gw_script += [(1.1, write_outbox), (2.37, write_outbox)]
+    until = lambda: len(rec["outbox_written"]) == 2 and len(  # noqa: E731
+        [p for p, _t in rec["posts"] if p.endswith("/messages")]) >= 2
 elif scenario == "hung":
     # The real api_get against a local server where one channel's read
     # never answers: the loop may stall for READ_TIMEOUT_SECS at most.
@@ -258,15 +289,29 @@ elif scenario == "hung":
     spec.loader.exec_module(real)
     mod.api_get = types.FunctionType(real.api_get.__code__, mod.__dict__)
     mod.api_post = types.FunctionType(real.api_post.__code__, mod.__dict__)
-    mod.READ_TIMEOUT_SECS = 2   # 8 in production; shorter for speed
+    mod.READ_TIMEOUT_SECS = 1   # 8 in production; shorter for speed
     setup({"C0": chan(), "C1": chan(), "CH": chan("hung")})
-    gw_script += [(1, lazy(lambda: mention("C0")))]
+    gw_script += [(0.4, lazy(lambda: mention("C0")))]
+    until = all_staged
 else:
     sys.exit(f"unknown scenario {scenario}")
 
 
 def on_alarm(*_):
     raise Stop()
+
+
+_orig_pending_wait = mod.pending_wait
+
+
+def check_then_wait(state, now):
+    """Called at the end of every main-loop pass, before its wait."""
+    if until and until():
+        raise Stop()
+    return _orig_pending_wait(state, now)
+
+
+mod.pending_wait = check_then_wait
 
 
 signal.signal(signal.SIGALRM, on_alarm)

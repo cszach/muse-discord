@@ -1,1 +1,1 @@
-~15 s: four main() scenarios, real-time subprocess runs of up to 13 s, run concurrently.
+~7 s: four main() scenarios, real-time subprocess runs (each stops once it has seen enough), run concurrently.

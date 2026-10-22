@@ -44,13 +44,13 @@ jobs:
       - name: Offline e2e harness tests
         run: python3 -m unittest discover -s e2e/tests -t .
       - name: Usage stats Worker tests (Node, no packages)
+        if: matrix.python == '3.13'   # not Python's: once is enough
         run: cd telemetry/worker && node --test
 
   offline:
     name: Offline suites (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
-    # The suites take under a minute (4 at a time); the slower ones are
-    # marked by a SLOW file in their directory (see tests/README.md).
+    # The suites take about 30 s (4 at a time); see tests/README.md.
     timeout-minutes: 5
     strategy:
       fail-fast: false

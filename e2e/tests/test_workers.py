@@ -22,8 +22,6 @@ import json
 import os
 import re
 import shutil
-import signal
-import subprocess
 import sys
 import tempfile
 import textwrap
@@ -89,9 +87,9 @@ class FakeWorker(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.pkg, ignore_errors=True)
 
     def test_directives_end_to_end(self):
-        """A real fake_worker process answers every item once, through
-        the real outbox tool, including every directive text the tier-1
-        scenarios send."""
+        """The fake worker answers every item once, through the real
+        outbox tool, including every directive text the tier-1 scenarios
+        send."""
         items = [
             queue_item("101", "<@900> hello"),
             queue_item("102", "first", [("103", "second"), ("104", "third")]),
@@ -99,9 +97,8 @@ class FakeWorker(unittest.TestCase):
             queue_item("106", "[[long]] [[mention_a]] [[everyone]] go"),
             queue_item("107", "hi", [("108", "[[silent]]")]),
             queue_item("110", "[[say:the Blue Pelican]] hi"),
-            queue_item("111", "[[settings:set who.replies=off @here]]"),
             queue_item("112", "plain", owner_dm_nonce=NONCE),
-            queue_item("113", "[[remind:90 the oven]] remind me"),
+            queue_item("113", "[[remind:90 the oven]] [[watch:pizza]] hi"),
             dict(queue_item("114", ""), kind="reminder",
                  reminder={"items": [{"id": "rabcde"}]}),
         ]
@@ -113,21 +110,15 @@ class FakeWorker(unittest.TestCase):
                     n += 1
                     items.append(queue_item(str(n), text, sc=sc["id"]))
         write_json(self.pkg, "reply_queue.json", items)
-        p = subprocess.Popen([sys.executable,
-                              os.path.join(E2E, "fake_worker.py"),
-                              "--pkg", self.pkg, "--interval", "0.1"],
-                             stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT, text=True)
-        try:
-            deadline = time.time() + 30
-            while len(read_json(self.pkg, "reply_outbox.json", [])) \
-                    < len(items) and time.time() < deadline:
-                time.sleep(0.1)
-            time.sleep(0.5)  # nothing more may arrive (no double answers)
-        finally:
-            p.send_signal(signal.SIGTERM)
-            out, _ = p.communicate(timeout=10)
-        self.assertEqual(p.returncode, 0, out)
+        now = [1000.0]
+        w = fake_worker.Worker(self.pkg, clock=lambda: now[0])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            w.tick()
+            now[0] += fake_worker.SLOW_SECS   # [[slow]] drafts come due
+            w.tick()
+            w.tick()                          # nothing answered twice
+        out = out.getvalue()
         outbox = read_json(self.pkg, "reply_outbox.json", [])
         got = {o["item"]: o for o in outbox}
         self.assertEqual(len(outbox), len(items), out)
@@ -144,13 +135,12 @@ class FakeWorker(unittest.TestCase):
             self.assertIn(frag, text[:100])  # survives the 1800 cap
         self.assertTrue(got["107"]["silent"])  # directive in a fragment
         self.assertEqual(got["110"]["text"], "ack 1 the Blue Pelican")
-        self.assertEqual(got["111"]["settings"]["changes"], [
-            {"op": "set", "place": f"channel:{GID}:{CID}",
-             "key": "who.replies", "value": "off"}])
         self.assertEqual(got["112"]["owner_dm_nonce"], NONCE)
         self.assertEqual(got["113"]["schedule"]["changes"], [
             {"op": "add", "kind": "remind", "after": 90,
-             "note": "the oven"}])
+             "note": "the oven"},
+            {"op": "add", "kind": "watch", "note": "pizza",
+             "match": {"words": ["pizza"], "in": "here"}}])
         self.assertEqual(got["114"]["text"], "reminder 1")
         self.assertNotIn("owner_dm_nonce", got["101"])
 
@@ -541,7 +531,7 @@ class Judge(ClaudeBase):
         for fake in ("garbage", "is_error", "exit2", "hang"):
             with self.subTest(fake):
                 self.use_fake(fake)
-                v = judge.judge(SCENARIO, TRANSCRIPT, timeout=2)
+                v = judge.judge(SCENARIO, TRANSCRIPT, timeout=0.5)
                 self.assertEqual(v["verdict"], "error", v)
         os.environ["CLAUDE_BIN"] = os.path.join(self.tmp, "nope")
         self.assertEqual(judge.judge(SCENARIO, TRANSCRIPT)["verdict"],

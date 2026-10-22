@@ -158,16 +158,22 @@ class AdminForgery(Base):
         self.assertEqual(self.ctx.value("who.ignore", S1), [BOB, SPAM, KAI])
 
 
+_OWNER_IDS = {}
+
+
 def owner_ids(ctx, pages):
-    """Every custom_id the owner's pages render (a short crawl)."""
-    H.install_determinism()
-    ids = set()
-    for ix in (command(OWNER, G1, "0"), command(OWNER)):
-        actor = crawl.Actor(OWNER, ix.get("guild_id"),
-                            "0" if ix.get("guild_id") else None)
-        ids |= crawl.Crawl(ctx, actor, pages).run(
-            "x", UI.handle(ix, ctx)).ids
-    return sorted(ids)
+    """Every custom_id the owner's pages render (a short crawl, done
+    once per page count: the fixtures are the same for every test)."""
+    if pages not in _OWNER_IDS:
+        H.install_determinism()
+        ids = set()
+        for ix in (command(OWNER, G1, "0"), command(OWNER)):
+            actor = crawl.Actor(OWNER, ix.get("guild_id"),
+                                "0" if ix.get("guild_id") else None)
+            ids |= crawl.Crawl(ctx, actor, pages).run(
+                "x", UI.handle(ix, ctx)).ids
+        _OWNER_IDS[pages] = sorted(ids)
+    return list(_OWNER_IDS[pages])
 
 
 class Members(Base):
@@ -223,7 +229,7 @@ class Ids(Base):
 class Fuzz(Base):
     def test_mutated_ids_never_crash(self):
         rnd = random.Random(7)
-        corpus = [c for c in owner_ids(self.ctx, 60) if c.startswith(P)]
+        corpus = [c for c in owner_ids(self.ctx, 80) if c.startswith(P)]
         pieces = ["x", "d", f"s{G1}", f"c{G1}.{GENERAL}", "=", "on", "off",
                   "-" + SAM, "+" + SAM, "v", "h", "y", "", "~media.enabled",
                   "r", "df", "ig", "friends", "med", "pp", "everyone",

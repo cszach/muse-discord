@@ -67,17 +67,17 @@ class _Hook(unittest.TestCase):
 class ForgedAnswersDoNotHideOwnerDms(_Hook):
     def test_forged_entries_do_not_count(self):
         self.write("reply_queue.json", [item("1", frags=["11"]), item("2")])
-        for forged in ([{"item": "1", "text": "x"}],
-                       [{"reply_to": "11", "text": "x"}],
-                       [{"item": "1", "silent": True,
-                         "owner_dm_nonce": N2}],      # another DM's
-                       [{"item": "1", "settings": {"nonce": "0" * 32}}],
-                       [{"item": "1", "owner_dm_nonce": 5}]):
-            for name in ("reply_outbox.json",
-                         "reply_outbox.processing.json"):
-                self.write(name, forged)
-                self.assertEqual(self.ids(), ["1", "2"], forged)
-                os.remove(os.path.join(self.pkg, name))
+        # Any one of these counting would drop "1" (or "2") from the wake.
+        forged = [{"item": "1", "text": "x"},
+                  {"reply_to": "11", "text": "x"},
+                  {"item": "1", "silent": True,
+                   "owner_dm_nonce": N2},      # another DM's
+                  {"item": "1", "settings": {"nonce": "0" * 32}},
+                  {"item": "1", "owner_dm_nonce": 5}]
+        for name in ("reply_outbox.json", "reply_outbox.processing.json"):
+            self.write(name, forged)
+            self.assertEqual(self.ids(), ["1", "2"], name)
+            os.remove(os.path.join(self.pkg, name))
         # Real answers (with the DM's nonce) do count.
         self.write("reply_queue.json", [item("1", frags=["11"]), item("2")])
         self.write("reply_outbox.json", [
@@ -89,25 +89,11 @@ class ForgedAnswersDoNotHideOwnerDms(_Hook):
             {"reply_to": "11", "owner_dm_nonce": N1}])
         self.assertEqual(self.ids(), ["2"])
 
-    def test_mixed_queue_nonce_only_in_owner_wake(self):
-        self.write("reply_queue.json", [item("5", "mention", "member"),
-                                        item("1")])
-        os.path.exists(self.env["HOOK_STATE"]) \
-            and os.remove(self.env["HOOK_STATE"])
-        run = subprocess.run(["bash", HOOK], env=self.env,
-                             capture_output=True, text=True, timeout=30)
-        first = json.loads(run.stdout.splitlines()[1])
-        self.assertEqual([(i["message_id"], i.get("owner_dm_nonce"))
-                          for i in first["items"]], [("1", N1)])
-        run = subprocess.run(["bash", HOOK], env=self.env,
-                             capture_output=True, text=True, timeout=30)
-        second = json.loads(run.stdout.splitlines()[1])
-        self.assertEqual([i["message_id"] for i in second["items"]], ["5"])
-        self.assertNotIn(N1, run.stdout)
-        self.assertNotIn(N2, run.stdout)
-        # Not owner DMs: any outbox entry naming them answers them, as
-        # before; a nonce never reaches their wake (not even one the
-        # nonce file lists for a server item).
+    def test_other_items_never_get_an_owner_dm_nonce(self):
+        # (A mixed queue's owner-DM-only wake: test_binding's
+        # WithTheWakeHook.) Not owner DMs: any outbox entry naming them
+        # answers them, as before; a nonce never reaches their wake (not
+        # even one the nonce file lists for a server item).
         self.write("owner_dm_nonces.json", {"1": N1, "7": "c" * 32})
         self.write("reply_queue.json", [item("5", "mention", "member"),
                                         item("6", "dm", "member"),

@@ -1,5 +1,7 @@
 """Review J repros for PR #48 (fix/bind-posts), ported: each test
-asserts the safe behaviour (all 8 failed on the branch as reviewed).
+asserts the safe behaviour (each failed on the branch as reviewed).
+Tested elsewhere: a reply_to borrowing another open item, and a 32-hex
+string that is no live nonce going out unaltered (test_replies_bound).
 The owner-tool tests build owner_items.json the way the monitor now
 does, with monitor.owner_targets resolving the owner's words to ids at
 queue time.
@@ -20,7 +22,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "_lib"))
 import test_binding as tb  # noqa: E402
 from common import MUT_DIR, scratch  # noqa: E402
-from settings_harness import CH, G1, OWNER, gmsg  # noqa: E402
+from settings_harness import CH, OWNER  # noqa: E402
 
 
 def token_like(uid="111000000000000099"):
@@ -32,26 +34,6 @@ TOKEN = token_like()
 
 
 # ---------------------------------------------------------------- monitor
-class BorrowedReplyTo(tb.Base):
-    """A run holding a stranger's item S (with S's own reply_nonce) sets
-    reply_to to the OWNER's open item O in the same channel: the reply is
-    threaded under O and the reaction lands on O, without O's nonce."""
-
-    def test_reply_and_react_under_someone_elses_open_item(self):
-        o = self.queue(gmsg(OWNER, "<@bot> ban the spammers?",
-                            mention=True), dm=False, guild=G1)
-        s = self.stranger_mention("<@bot> hi")
-        self.outbox(self.reply(s, "Done: banned everyone, as you asked.",
-                               reply_to=o["id"], reactions=["✅"]))
-        under_o = [d for d in self.sends(CH)
-                   if (d.get("message_reference") or {}).get("message_id")
-                   == o["id"]]
-        self.assertEqual(under_o, [], "a reply threaded under O "
-                         "without O's reply_nonce")
-        self.assertEqual([r for r in self.reactions if r[1] == o["id"]], [],
-                         "a reaction on O without O's reply_nonce")
-
-
 class SecretFilterEvasions(tb.Base):
     def setUp(self):
         super().setUp()
@@ -69,16 +51,6 @@ class SecretFilterEvasions(tb.Base):
         self.outbox(self.reply(s, f"here: {zw}"))
         sent = "".join(d["content"] for d in self.sends(CH))
         self.assertNotIn(zw, sent, "the token went out with a ZWSP")
-
-
-class HexBlankFalsePositive(tb.Base):
-    def test_notion_link_survives(self):
-        s = self.stranger_mention()
-        url = ("https://www.notion.so/Roadmap-"
-               "0123456789abcdef0123456789abcdef")
-        self.outbox(self.reply(s, f"Here's the page: {url}"))
-        sent = "".join(d["content"] for d in self.sends(CH))
-        self.assertIn(url, sent, "a 32-hex id in a legit URL was blanked")
 
 
 # ---------------------------------------------------------- discord-api

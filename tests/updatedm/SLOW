@@ -1,1 +1,1 @@
-~15 s: watchdog runs in scratch git repos and user namespaces.
+~5 s: real watchdog.sh runs in scratch git repos and user namespaces (run at once).

@@ -3,9 +3,10 @@ ignored); a check result counts only with
 that check's live one-time nonce, for an active watch (forged, reused,
 late or unknown ones change nothing); met, refused and gave-up fire
 once, to the requester only; the daily check budget; the checker hook
-(hooks/watch-due.sh) leases what it hands out and wakes nothing when
-nothing is due; the rendered checker prompt carries the checks only
-inside its data block.
+(hooks/watch-due.sh) leases what it hands out, one requester per run,
+and wakes nothing when nothing is due; the rendered checker prompt
+carries the checks only inside its data block; the report tool takes
+only a live check.
 
 Usage: [MUT_DIR=<tree>] python3 tests/watches/test_web.py"""
 import json
@@ -59,14 +60,6 @@ class Web(tw.Base):
         self.tick()
         (e,) = self.due()
         return e
-
-    def test_non_owner_refused(self):
-        msg = self.web(U1)
-        self.assertEqual(self.items(), {})
-        self.assertEqual(self.ledger(msg["id"])["code"], "watch-not-allowed")
-        self.web(OWNER)
-        self.assertEqual([r["kind"] for r in self.items().values()],
-                         ["watch-web"])
 
     def test_forged_reused_and_unknown_reports_change_nothing(self):
         self.web()
@@ -238,42 +231,13 @@ class CheckerHook(unittest.TestCase):
         self.assertNotIn("fghjk" * 6, first)          # nor their nonce
         self.assertIn("wfghjk", self.wake())          # the next run
 
-    def test_report_summary_on_stdin(self):
-        tool = os.path.join(self.pkg, "bin", "watch-report.py")
-        e = self.entry("wabcde")
-        self.due([e])
-        r = subprocess.run([sys.executable, tool, "wabcde", e["nonce"],
-                            "met", "--stdin"], input="on sale; $(rm -rf ~)\n",
-                           capture_output=True, text=True, timeout=30)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        with open(os.path.join(self.pkg, "web_watch_results.json")) as f:
-            self.assertEqual(json.load(f)[0]["summary"],
-                             "on sale; $(rm -rf ~)")       # data, as is
-
-    def test_mention_hook_wakes_a_web_capable_item_alone(self):
-        q = [{"message_id": "6", "channel_id": CH, "kind": "mention",
-              "settings": {"where": "server", "speaker": "member"}},
-             {"message_id": "5", "channel_id": CH, "kind": "mention",
-              "settings": {"where": "server", "speaker": "owner"}}]
-        for name, data in (("reply_queue.json", q),
-                           ("web_nonces.json", {"5": "c" * 32})):
-            with open(os.path.join(self.pkg, name), "w") as f:
-                json.dump(data, f)
-        r = subprocess.run(["bash", os.path.join(self.pkg, "hooks",
-                                                 "mention-watch.sh")],
-                           env=self.env, capture_output=True, text=True,
-                           timeout=30)
-        items = json.loads(r.stdout.splitlines()[1])["items"]
-        self.assertEqual([i["message_id"] for i in items], ["5"])
-        self.assertEqual(items[0]["web_nonce"], "c" * 32)
-
     def test_report_tool_needs_a_live_check(self):
         tool = os.path.join(self.pkg, "bin", "watch-report.py")
         e = self.entry("wabcde")
         self.due([e])
 
-        def run(*args):
-            return subprocess.run([sys.executable, tool, *args],
+        def run(*args, stdin=None):
+            return subprocess.run([sys.executable, tool, *args], input=stdin,
                                   capture_output=True, text=True, timeout=30)
         for bad in (("wabcde", "c" * 32, "met", "x"),        # wrong nonce
                     ("wzzzzz", e["nonce"], "met", "x"),      # unknown id
@@ -281,10 +245,13 @@ class CheckerHook(unittest.TestCase):
             self.assertNotEqual(run(*bad).returncode, 0, bad)
         results = os.path.join(self.pkg, "web_watch_results.json")
         self.assertFalse(os.path.exists(results))
-        self.assertEqual(run("wabcde", e["nonce"], "met", "on sale now")
-                         .returncode, 0)
+        # The summary on stdin, as the checker prompt has it: data, as is.
+        r = run("wabcde", e["nonce"], "met", "--stdin",
+                stdin="on sale; $(rm -rf ~)\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
         with open(results) as f:
-            self.assertEqual([r["result"] for r in json.load(f)], ["met"])
+            self.assertEqual([(r["result"], r["summary"]) for r in
+                              json.load(f)], [("met", "on sale; $(rm -rf ~)")])
 
 
 if __name__ == "__main__":

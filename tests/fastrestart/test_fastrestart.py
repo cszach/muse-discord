@@ -31,10 +31,18 @@ if os.environ.get("FR_IN_NS") != "1":
     sys.exit(r.returncode)
 
 
+PATS = ("monitor.py", "presence.py", "watchdog.sh")
+
+
 def killall():
-    for pat in ("monitor.py", "presence.py", "watchdog.sh"):
+    for pat in PATS:
         subprocess.run(["pkill", "-9", "-f", pat], capture_output=True)
-    time.sleep(0.2)
+    end = time.time() + 5
+    while time.time() < end and any(
+            subprocess.run(["pgrep", "-f", pat],
+                           capture_output=True).returncode == 0
+            for pat in PATS):
+        time.sleep(0.02)
 
 
 class Base(unittest.TestCase):
@@ -48,7 +56,13 @@ class Base(unittest.TestCase):
         shutil.copy(os.path.join(MUT_DIR, "hooks", "mention-watch.sh"),
                     os.path.join(self.d, "hooks"))
         if self.real_watchdog:
-            copy_watchdog(self.d)
+            # Also poll the run lock every 0.05 s instead of 1 s.
+            wd = copy_watchdog(self.d)
+            with open(wd) as f:
+                text = f.read()
+            with open(wd, "w") as f:
+                f.write(text.replace("        time.sleep(1)\n",
+                                     "        time.sleep(0.05)\n"))
         else:
             shutil.copy(os.path.join(HERE, "fake_watchdog.sh"),
                         os.path.join(self.d, "watchdog.sh"))
@@ -66,7 +80,7 @@ class Base(unittest.TestCase):
         self.env = dict(os.environ,
                         HATCH_HOOK_RUNTIME=RUNTIME, HOOK_STATE=self.state,
                         MUSE_DISCORD_DIR=self.d,
-                        PYTHONPATH=FAKEWS, FAKE_WD_SECS="1.5")
+                        PYTHONPATH=FAKEWS, FAKE_WD_SECS="1.2")
         self.env.pop("MUSE_DISCORD_CONFIG", None)
 
     def tearDown(self):
@@ -155,8 +169,6 @@ class Base(unittest.TestCase):
 class HookTrigger(Base):
     def test_dead_monitor_triggers_once_fast_and_silent(self):
         secs, out = self.hook()
-        print(f"[hook returned in {secs * 1000:.0f} ms] ", end="",
-              file=sys.stderr, flush=True)
         self.assertLess(secs, 1.0, out)
         self.assertNotIn("WAKE", out)
         self.assertIn("SILENT", out)
@@ -168,9 +180,9 @@ class HookTrigger(Base):
         self.assertNotEqual(sid, self.last_hook_pid)
         # A second run right away is rate limited.
         secs, out = self.hook()
-        self.assertEqual(len(self.wait_calls(2, 0.5)), 1)
+        self.assertEqual(self.get_state()["restart"]["fails"], 1)
         # The restart survived the kill of the hook's process group and
-        # the hook did not wait for it (it takes 1.5s).
+        # the hook did not wait for it (it takes 1.2s).
         end = time.time() + 6
         while time.time() < end:
             with open(self.p("wd_calls")) as f:
@@ -179,12 +191,13 @@ class HookTrigger(Base):
             time.sleep(0.1)
         with open(self.p("wd_calls")) as f:
             self.assertIn("done", f.read())
+        self.assertEqual(len(self.calls()), 1)
 
     def test_queue_work_still_wakes_and_keeps_both_states(self):
         with open(self.p("reply_queue.json"), "w") as f:
             json.dump([{"message_id": "1", "channel_id": "9"}], f)
         secs, out = self.hook()
-        self.assertIn("WAKE: muse-discord mentions pending", out)
+        self.assertIn("\nWAKE:", "\n" + out)
         self.assertEqual(len(self.wait_calls(1)), 1)
         st = self.get_state()
         self.assertIn("1", st["woken"])
@@ -199,14 +212,14 @@ class HookTrigger(Base):
         # only the pidfile can tell the hook it is alive.
         mon = self.start_monitor(self.p("monitor.py"))
         self.hook()
-        self.assertEqual(self.wait_calls(1, 0.5), [])
         self.assertEqual(self.get_state(), {})
         mon.kill()
         mon.wait()
         # No pidfile: pgrep finds it.
         self.start_monitor("monitor.py", pidfile=False)
         self.hook()
-        self.assertEqual(self.wait_calls(1, 0.5), [])
+        self.assertEqual(self.get_state(), {})
+        self.assertEqual(self.wait_calls(1, 0.3), [])
 
     def test_stale_pidfile_with_reused_pid_triggers(self):
         sl = subprocess.Popen(["sleep", "30"])
@@ -229,8 +242,10 @@ class HookTrigger(Base):
             # Within the window: no new attempt.
             self.hook()
             self.hook()
-            self.assertEqual(len(self.wait_calls(i + 1, 0.3)), i)
+            self.assertEqual(self.get_state()["restart"], r)
             self.expire()
+        self.assertEqual(len(self.wait_calls(len(expect) + 1, 0.3)),
+                         len(expect))
 
     def test_recovery_resets_backoff(self):
         now = int(time.time())
@@ -259,9 +274,9 @@ class HookTrigger(Base):
                     "refused the bot token. Exiting.\n")
         for _ in range(3):
             self.hook()
-        self.assertEqual(self.wait_calls(1, 0.5), [])
         now = int(time.time())
         r = self.get_state()["restart"]
+        self.assertEqual(r["fails"], 0)
         self.assertTrue(now + 590 <= r["next"] <= now + 601, r)
         # The watchdog's alert state says so.
         os.remove(self.p("monitor.log"))
@@ -270,7 +285,8 @@ class HookTrigger(Base):
             json.dump({"last_alert": "monitor DOWN: Discord rejected the "
                        "token; it was probably reset."}, f)
         self.hook()
-        self.assertEqual(self.wait_calls(1, 0.5), [])
+        self.assertEqual(self.get_state()["restart"]["fails"], 0)
+        self.assertEqual(self.wait_calls(1, 0.3), [])
         # Any other alert still restarts.
         self.put_state({})
         with open(self.p("watchdog_state.json"), "w") as f:
@@ -291,7 +307,7 @@ class RealWatchdog(Base):
                                capture_output=True)
             if r.returncode != 0:
                 return
-            time.sleep(0.2)
+            time.sleep(0.05)
         self.fail("watchdog.sh still running")
 
     def wd(self, *args):
@@ -330,9 +346,12 @@ class RealWatchdog(Base):
         self.assertFalse(os.path.exists(self.p("watchdog_state.json")))
         for _ in range(3):
             self.expire()
-            secs, out = self.hook()
-            self.assertIn("token rejection", out)
-        time.sleep(0.5)
+            now = int(time.time())
+            self.hook()
+            r = self.get_state()["restart"]
+            self.assertEqual(r["fails"], 1)   # no new attempt
+            self.assertGreaterEqual(r["next"], now + 590)
+        time.sleep(0.3)  # a detached start would show by now
         self.wait_wd_idle()
         self.assertEqual(len(self.starts()), 1)
         r = self.wd()

@@ -9,19 +9,20 @@ import sys
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# scenario -> seconds of main() at most (the alarm)
-SCENARIOS = {"boot401": 3, "boot429": 3, "gw4004": 4, "rest401": 5,
-             "phases": 3, "identity_pending": 3, "ready_identity": 3,
-             "batch_fold": 4}
+# Each stops once it has seen enough (run_main.py); this alarm only
+# bounds a failing one.
+SECS = 20
+SCENARIOS = ["boot401", "boot429", "gw4004", "rest401", "phases",
+             "identity_pending", "ready_identity", "batch_fold"]
 _procs = {}
 _results = {}
 
 
 def setUpModule():
-    for name, secs in SCENARIOS.items():
+    for name in SCENARIOS:
         _procs[name] = subprocess.Popen(
             [sys.executable, os.path.join(HERE, "run_main.py"), name,
-             str(secs)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+             str(SECS)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, env=os.environ.copy())
 
 

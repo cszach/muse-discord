@@ -1,7 +1,7 @@
-"""Locking and speed, offline: worker appends during a slow send are
-never lost, concurrent appends are each sent once, the queue is never
-resurrected, the reply lock, typing indicators, burst coalescing and
-early flush.
+"""Locking, offline: worker appends during a send are never lost,
+concurrent appends are each sent once, the queue is never resurrected,
+atomic writes, answered items settled, malformed and corrupt outboxes,
+retries and crash leftovers, the typing thread, burst windows.
 MUT_DIR = the package tree under test (default: this checkout).
 Run: python3 tests/locking/test_locking.py [-k name]"""
 import json
@@ -10,7 +10,6 @@ import subprocess
 import sys
 import threading
 import time
-import types
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -49,37 +48,37 @@ def qitem(mid, cid="101", **kw):
 def test_worker_append_during_slow_send_not_lost():
     pkg = fresh_pkg()
     st = new_state()
-    m.random.uniform = lambda a, b: 0.4  # typing beat between parts
-    orig = m.api_post
+    orig_post, orig_uniform = m.api_post, m.random.uniform
+    a, b = snowflake(), snowflake()
 
-    def slow_post(path, data):
-        if path.endswith("/messages"):
-            time.sleep(0.3)
-        return orig(path, data)
-    m.api_post = slow_post
+    def post(path, data):
+        # The worker appends while part one of a's reply is going out.
+        if path.endswith("/messages") and not sent_texts():
+            assert os.path.exists(m.OUTBOX_PROCESSING_FILE)
+            append_via_helper(pkg, [S(st, {"item": b, "channel_id": "101",
+                                           "reply_to": b,
+                                           "text": "for b"})])
+        return orig_post(path, data)
+    m.api_post = post
+    m.random.uniform = lambda lo, hi: 0  # no typing beat between parts
     try:
-        a, b = snowflake(), snowflake()
         write(m.QUEUE_FILE, [qitem(a), qitem(b)])
         write(m.OUTBOX_FILE, [S(st, {"item": a, "channel_id": "101",
                                      "reply_to": a,
                                      "parts": ["one", "two", "three"]})])
-        t = threading.Thread(target=m.process_outbox, args=(st,))
-        t.start()
-        time.sleep(0.4)  # mid-send
-        assert os.path.exists(m.OUTBOX_PROCESSING_FILE)
-        append_via_helper(pkg, [S(st, {"item": b, "channel_id": "101",
-                                       "reply_to": b, "text": "for b"})])
-        t.join()
+        with capture():
+            m.process_outbox(st)
         assert sent_texts() == ["one", "two", "three"], sent_texts()
         out = read(m.OUTBOX_FILE)
         assert [i["item"] for i in out] == [b], out  # NOT lost
         assert not os.path.exists(m.OUTBOX_PROCESSING_FILE)
         assert [q["message_id"] for q in read(m.QUEUE_FILE)] == [b]
-        m.process_outbox(st)
+        with capture():
+            m.process_outbox(st)
         assert sent_texts()[-1] == "for b"
         assert read(m.QUEUE_FILE) == [] and read(m.OUTBOX_FILE) == []
     finally:
-        m.api_post = orig
+        m.api_post, m.random.uniform = orig_post, orig_uniform
 
 
 def test_concurrent_appends_stress_each_sent_once():
@@ -91,7 +90,7 @@ def test_concurrent_appends_stress_each_sent_once():
 
     def slow_post(path, data):
         if path.endswith("/messages"):
-            time.sleep(0.05)
+            time.sleep(0.01)
         return orig(path, data)
     m.api_post = slow_post
     try:
@@ -118,8 +117,8 @@ def test_concurrent_appends_stress_each_sent_once():
             assert p.wait() == 0
         deadline = time.time() + 20
         while time.time() < deadline and len(sent_texts()) < len(ids):
-            time.sleep(0.1)
-        time.sleep(0.3)
+            time.sleep(0.02)
+        time.sleep(0.1)  # a duplicate send would land now
         stop.set()
         t.join()
         texts = sent_texts()
@@ -141,19 +140,15 @@ def test_queue_write_no_resurrect_no_drop():
     st["pending"][next(iter(st["pending"]))]["first_seen"] -= 10
 
     def slow_media(_msg):
-        time.sleep(0.4)
+        # Another writer removes x and appends w mid-flush.
+        m.queue_edit(add=[qitem(w)], drop=lambda q: q["message_id"] == x)
         return [], [], []
     m.collect_media = slow_media
     # Main-loop pattern (main(): snapshot, flush, delta write).
     queue = m.load_queue()
     n_before = len(queue)
-    t = threading.Thread(target=lambda: (
-        time.sleep(0.1),
-        m.queue_edit(add=[qitem(w)], drop=lambda q: q["message_id"] == x)))
-    t.start()
     with capture():
         assert m.flush_pending(st, queue)
-    t.join()
     m.queue_edit(add=queue[n_before:])
     m.collect_media = lambda _m: ([], [], [])
     ids = [q["message_id"] for q in read(m.QUEUE_FILE)]
@@ -365,75 +360,104 @@ def test_retry_merges_with_appends():
     assert read(m.QUEUE_FILE) == []
 
 
+class _SteppedClock:
+    """monitor's `time` with a fake clock the test steps: the typing
+    thread's 1 s sleep returns only on step(), so every tick is exact and
+    no test time passes. Other threads sleep for real."""
+
+    def __init__(self):
+        self.now = time.time()
+        self.thread = None
+        self._go = threading.Semaphore(0)
+        self._idle = threading.Semaphore(0)
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    def time(self):
+        return self.now
+
+    def sleep(self, secs):
+        if threading.current_thread() is not self.thread:
+            return time.sleep(secs)
+        self._idle.release()
+        self._go.acquire()
+
+    def step(self, ticks=1):
+        """Run the typing thread for `ticks` seconds of its clock."""
+        for _ in range(ticks):
+            assert self._idle.acquire(timeout=10), "typing thread stuck"
+            self.now += 1
+            self._go.release()
+        assert self._idle.acquire(timeout=10), "typing thread stuck"
+        self._idle.release()
+
+
 def test_typing_thread_lifecycle():
     fresh_pkg()
     st = new_state()
-    # The typing thread on a 4x clock: its 1 s tick takes 0.25 s, pings
-    # every 0.5 s and stops after 1.5 s (8 s and 180 s in production).
-    g = dict(m.__dict__, TYPING_EVERY_SECS=0.5, TYPING_MAX_SECS=1.5,
-             time=types.SimpleNamespace(
-                 time=time.time, sleep=lambda secs: time.sleep(secs / 4)))
-    t = threading.Thread(target=types.FunctionType(
-        m._typing_thread_main.__code__, g), daemon=True)
-    t.start()
+    clock = _SteppedClock()
+    m.time = clock
+    clock.thread = threading.Thread(target=m._typing_thread_main,
+                                    daemon=True)
+    clock.thread.start()
+
+    def pings(cid=None):
+        return len([c for c in typing_calls()
+                    if cid is None or f"/{cid}/" in c[2]])
     try:
         # 1. pending burst types; a burst in enqueue back-off does not
         m.stage_trigger(st, msg(cid="101", author="U1"), "S #a", "G",
                         "mention")
         m.stage_trigger(st, msg(cid="103", author="U3"), "S #c", "G",
                         "mention")
-        st["pending"]["103:U3"]["next_try"] = time.time() + 300
+        st["pending"]["103:U3"]["next_try"] = clock.now + 300
         write(m.QUEUE_FILE, [])
         with capture():
             m.typing_refresh(st)
-        time.sleep(0.4)
+        clock.step()
         chans = {c[2].split("/")[2] for c in typing_calls()}
         assert chans == {"101"}, chans
         # 2. the main loop goes quiet (slow work) after the burst is
         # queued: typing keeps going on its own clock
         del st["pending"]
         a = snowflake()
-        write(m.QUEUE_FILE, [qitem(a, cid="101")])
+        write(m.QUEUE_FILE, [qitem(a, cid="101", queued_at=clock.now)])
         m.typing_refresh(st)
-        n0 = len(typing_calls())
-        time.sleep(1.2)
-        c1 = [c for c in typing_calls()[n0:] if "/101/" in c[2]]
-        assert len(c1) >= 2, typing_calls()
+        n0 = pings("101")
+        clock.step(2 * m.TYPING_EVERY_SECS)
+        assert pings("101") - n0 >= 2, typing_calls()
         # 3. the reply goes out: typing stops for good
         write(m.OUTBOX_FILE, [S(st, {"item": a, "channel_id": "101",
                                      "reply_to": a, "text": "done"})])
         with capture():
             m.process_outbox(st)
         m.typing_refresh(st)
-        sent_at = time.time()
-        time.sleep(0.8)
-        after = [c for c in typing_calls() if c[0] > sent_at]
-        assert not after, after
-        # 4. an item nobody answers stops after TYPING_MAX_SECS
+        n0 = pings()
+        clock.step(3 * m.TYPING_EVERY_SECS)
+        assert pings() == n0, typing_calls()[n0:]
+        # 4. an item nobody answers stops after TYPING_MAX_SECS: queued
+        # a ping interval short of it, it types once more, then stops
         b = snowflake()
-        it = qitem(b, cid="105")
-        # Queued 0.5 s ago: 1 s of typing left (TYPING_MAX_SECS = 1.5),
-        # so a slow runner still sees at least one refresh (every 0.5 s).
-        it["queued_at"] = time.time() - 0.5
+        it = qitem(b, cid="105", queued_at=clock.now - m.TYPING_MAX_SECS
+                   + m.TYPING_EVERY_SECS)
         write(m.QUEUE_FILE, [it])
         m.typing_refresh(st)
-        time.sleep(0.7)
-        assert [c for c in typing_calls() if "/105/" in c[2]]
-        cut = it["queued_at"] + 1.5 + 0.2
-        time.sleep(max(0.0, cut - time.time()))
-        time.sleep(0.7)
-        assert not [c for c in typing_calls()
-                    if "/105/" in c[2] and c[0] > cut]
+        clock.step()
+        assert pings("105") == 1, typing_calls()
+        clock.step(3 * m.TYPING_EVERY_SECS)
+        assert pings("105") == 1, typing_calls()
         # 5. REST back-off: no typing at all
-        it["queued_at"] = time.time()
+        it["queued_at"] = clock.now
         write(m.QUEUE_FILE, [it])
         m.typing_refresh(st)
-        m._rl_until = time.time() + 100
-        cut = time.time()
-        time.sleep(0.7)
+        m._rl_until = clock.now + 100
+        n0 = pings()
+        clock.step(2 * m.TYPING_EVERY_SECS)
         m.send_typing("109")
-        assert not [c for c in typing_calls() if c[0] > cut]
+        assert pings() == n0, typing_calls()[n0:]
     finally:
+        m.time = time
         m._rl_until = 0.0
         m._typing_sources.clear()
 

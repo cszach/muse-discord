@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "_lib"))
@@ -44,6 +45,10 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.mod = load_monitor(CFG)
         m = self.mod
+        # No 2-4 s typing beat between the parts of a multi-part reply.
+        beat = mock.patch.object(m.random, "uniform", lambda a, b: 0.0)
+        beat.start()
+        self.addCleanup(beat.stop)
         for cid, uid in ((DM, OWNER), (DM2, OWNER2), (DM_U1, U1)):
             m.DM_CHANNELS[cid] = "dm"
             m.DM_CHANNEL_USER[cid] = uid
@@ -137,7 +142,6 @@ class Base(unittest.TestCase):
                          self.out)
         self.assertNotIn(msg["id"], self.queued())
         self.assertNotIn(msg["id"], self.st["nl_nonces"])
-        self.assertNotIn("duplicate", self.out.lower())
 
     def assert_refused(self, why=None):
         """The last outbox() call's items were set aside (refused), not

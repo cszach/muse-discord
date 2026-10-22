@@ -1,7 +1,7 @@
 """The /settings crawler: from every entry point, click every control a
 page renders and check every response against Discord's limits (types,
 flags, component counts and nesting, labels, options, custom_id length
-and uniqueness, modal shapes, the text budget) and against names that
+and uniqueness, modal shapes, the text limit) and against names that
 could ping, mention or link (hostile server, channel and user names).
 A response that crashes or calls its own control out of date is a
 problem too. Nothing here reads the pages' words: the redesign may
@@ -44,27 +44,6 @@ FILLER = re.compile(r"(6[12]000000000000000\d{3}|7[12]000000000000000\d{3})")
 # ---------------------------------------------------------------------------
 # Checks
 # ---------------------------------------------------------------------------
-def visible(resp):
-    """Every piece of text a person sees: text displays, labels, option
-    labels and descriptions, placeholders, modal titles."""
-    out = []
-    data = resp.get("data") or {}
-    if resp.get("type") == 9:
-        out.append(data.get("title") or "")
-    for c in H.walk(data.get("components")):
-        for k in ("content", "label", "placeholder", "description"):
-            if isinstance(c.get(k), str):
-                out.append(c[k])
-        for o in c.get("options") or []:
-            out.append(o.get("label") or "")
-            out.append(o.get("description") or "")
-    return out
-
-
-def budget(resp):
-    return sum(len(t) for t in visible(resp))
-
-
 def check(resp, where):
     """Problems with one response (empty: fine)."""
     bad = []

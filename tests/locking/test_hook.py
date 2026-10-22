@@ -5,9 +5,6 @@ fragment in reply_outbox.processing.json) are never handed out again,
 the persona file is passed along (null when missing), and a corrupt
 outbox is tolerated. Runs the hook with bash and jq against stubbed
 hatch hook runtime functions (_lib/hook_runtime.sh).
-
-Recovered from the locking suite's hooktest.sh, which printed these
-scenarios for a human to read; here each outcome is asserted.
 MUT_DIR = the package tree under test (default: this checkout)."""
 import json
 import os
@@ -45,6 +42,7 @@ class MentionWatchLeases(unittest.TestCase):
     def run_hook(self):
         r = subprocess.run(["bash", HOOK], env=self.env, capture_output=True,
                            text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout, r.stderr
 
     def wake_ids(self, out):
@@ -65,11 +63,11 @@ class MentionWatchLeases(unittest.TestCase):
             json.dump(st, f)
 
     def test_lease_lifecycle(self):
-        out, _ = self.run_hook()
-        self.assertTrue(out.startswith("SILENT: no queue file"), out)
+        out, _ = self.run_hook()   # no queue file
+        self.assertIsNone(self.wake_ids(out), out)
         self.put("reply_queue.json", [])
         out, _ = self.run_hook()
-        self.assertTrue(out.startswith("SILENT: queue empty"), out)
+        self.assertIsNone(self.wake_ids(out), out)
 
         self.put("config.yaml", 'persona:\n  file: "mypersona.md"\n')
         self.put("mypersona.md", PERSONA)
@@ -84,8 +82,7 @@ class MentionWatchLeases(unittest.TestCase):
 
         # Both leases are fresh: a second wake is held.
         out, _ = self.run_hook()
-        self.assertTrue(out.startswith(
-            "SILENT: a worker already holds every open item"), out)
+        self.assertIsNone(self.wake_ids(out), out)
 
         # A new item wakes alone.
         self.put("reply_queue.json", [
@@ -103,9 +100,8 @@ class MentionWatchLeases(unittest.TestCase):
         self.put("reply_outbox.processing.json",
                  [{"channel_id": "9", "reply_to": "3", "text": "x"}])
         self.age_leases()
-        out, err = self.run_hook()
+        out, _ = self.run_hook()
         self.assertEqual(self.wake_ids(out), ["1"], out)
-        self.assertIn("re-waking: item lease expired", err)
         with open(self.state) as f:
             self.assertIn("1", json.load(f)["woken"])
 

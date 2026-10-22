@@ -1,1 +1,1 @@
-~15 s: real watchdog.sh and hook runs against fake processes in a user+PID namespace.
+~8 s: real watchdog.sh and hook runs against fake processes in a user+PID namespace.

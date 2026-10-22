@@ -83,7 +83,6 @@ TOKEN_RE = re.compile(
 SAMPLE_IDS = {"SUT": "100000000000000001", "A": "100000000000000002",
               "B": "100000000000000003", "SUT_NAME": "muse-test"}
 SAMPLE_GUILD = "100000000000000000"
-SAMPLE_CHANNEL = "100000000000000009"
 # settings step: how long to wait for the monitor to log the reload
 # (its main loop re-checks the files at least every ~2 s), and how
 # often to look.
@@ -701,12 +700,8 @@ class Runner:
             return
         if name == "start_monitor":
             self.sut.start(gateway=self.sut.gateway)
-        elif name == "restart_monitor":
-            self.sut.restart()
         elif name == "gateway_off":
             self.sut.restart(gateway=False)
-        elif name == "gateway_on":
-            self.sut.restart(gateway=True)
         else:
             raise ValueError(f"unknown action {name!r}")
         self.starts += 1

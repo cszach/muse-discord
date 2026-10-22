@@ -1,6 +1,7 @@
-"""Run monitor.main() with a process_outbox that blocks 4s per tick;
-inject a /settings command, a mdset: button click and a mdset: modal
-submit mid-block, and time each callback. Prints one JSON line.
+"""Run monitor.main() with a process_outbox that blocks (up to 3 s)
+until the interactions are acked, then stops main(); inject a /settings
+command, a mdset: button click and a mdset: modal submit mid-block, and
+time each callback. Prints one JSON line.
 Usage: [MUT_DIR=<tree>] python3 main_scenario.py"""
 import contextlib
 import io
@@ -28,8 +29,18 @@ with open(mod.STATE_FILE, "w") as f:
     json.dump({"guild_joined": {H.G1: 0}, "known_guilds": {H.G1: "Srv"}}, f)
 
 
+in_outbox = threading.Event()
+acked = threading.Event()
+
+
+class Stop(BaseException):
+    pass
+
+
 def slow_outbox(state):
-    time.sleep(4)
+    in_outbox.set()
+    acked.wait(3)   # only acks that come while the main loop is blocked
+    raise Stop()
 
 
 mod.process_outbox = slow_outbox
@@ -50,6 +61,8 @@ def cb(i, resp):
     res["acks"].append({"id": i["id"],
                         "after": time.time() - res["put_at"][i["id"]],
                         "resp": resp})
+    if len(res["acks"]) == 3:
+        acked.set()
 
 
 mod.interaction_callback = cb
@@ -57,7 +70,7 @@ res["put_at"] = {}
 
 
 def fake_gw(token, inbox, status):
-    time.sleep(1.0)  # the main loop is inside slow_outbox by now
+    in_outbox.wait(5)
     for n, (t, data) in enumerate([
             (2, {"name": "settings", "type": 1}),
             (3, {"custom_id": "mdset:p:e", "component_type": 2}),
@@ -67,14 +80,10 @@ def fake_gw(token, inbox, status):
         status["interactions"].put({
             "id": iid, "token": "tok", "type": t, "data": data,
             "user": {"id": H.OWNER}})
-        time.sleep(0.3)
+        time.sleep(0.05)
 
 
 mod._gateway_thread_main = fake_gw
-
-
-class Stop(BaseException):
-    pass
 
 
 def on_alarm(*_):
@@ -82,7 +91,7 @@ def on_alarm(*_):
 
 
 signal.signal(signal.SIGALRM, on_alarm)
-signal.setitimer(signal.ITIMER_REAL, 5)
+signal.setitimer(signal.ITIMER_REAL, 10)
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     try:

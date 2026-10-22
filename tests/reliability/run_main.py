@@ -1,5 +1,7 @@
-"""Run monitor.main() offline for one scenario, under an alarm, and print a
-JSON result: {"exit": code|"timeout"|"stopped", "out": stdout, ...}."""
+"""Run monitor.main() offline for one scenario and print a JSON result:
+{"exit": code|"stopped", "out": stdout, ...}. main() is stopped as soon
+as the scenario's `until` holds (checked at the end of each loop pass),
+or by the alarm."""
 import contextlib
 import io
 import json
@@ -56,6 +58,7 @@ mod.sweep_media = counting_sm
 me = {"id": BOT, "username": "musebot"}
 mod.api.routes["/users/@me"] = me
 mod.BOT_ID = mod.BOT_USER_ID = None  # main() fetches it
+until = None  # () -> True once the scenario has seen enough
 one_channel = ({"C1": chan()}, {G1: {"name": "Srv",
                                      "system_channel_id": None,
                                      "joined_at": None}})
@@ -92,6 +95,11 @@ elif scenario == "rest401":
     mod.discover_channels = lambda previous=None: one_channel
     write_state({"last_seen": {"C1": "1"}})
     mod.api.errors["/channels/C1/messages"] = HTTPErr(401)
+
+    def act(inbox, status):
+        time.sleep(0.5)  # an event wakes the loop after the poll's 401
+        status["wake"].set()
+    gw_action["fn"] = act
 elif scenario == "phases":
     mod.discover_channels = lambda previous=None: one_channel
     write_state({"last_seen": {"C1": "1"}})
@@ -99,11 +107,13 @@ elif scenario == "phases":
     def broken_outbox(state):
         raise RuntimeError("corrupt outbox")
     mod.process_outbox = broken_outbox
+    until = lambda: calls["sweep_media"]  # noqa: E731  (a full cycle)
 elif scenario == "identity_pending":
     # Non-401 identity failure; REST otherwise fine.
     mod.api.errors["/users/@me"] = HTTPErr(500)
     mod.discover_channels = lambda previous=None: one_channel
     write_state({"last_seen": {"C1": "1"}})
+    until = lambda: calls["sweep_media"]  # noqa: E731  (a full cycle)
 elif scenario == "ready_identity":
     mod.api.errors["/users/@me"] = HTTPErr(500)
     mod.discover_channels = lambda previous=None: one_channel
@@ -112,7 +122,9 @@ elif scenario == "ready_identity":
     def act(inbox, status):
         time.sleep(0.5)
         status["user"] = me
+        status["wake"].set()
     gw_action["fn"] = act
+    until = lambda: mod.BOT_USER_ID  # noqa: E731
 elif scenario == "batch_fold":
     mod.discover_channels = lambda previous=None: one_channel
     m0 = msg("C1", "U2", "earlier", age=60)
@@ -120,12 +132,26 @@ elif scenario == "batch_fold":
     m1 = msg("C1", "U1", "@bot quick question", mention=True, age=5)
     m2 = msg("C1", "U1", "what's the deploy command?", age=4)
     mod.api.msgs["C1"] = [m0, m1, m2]
+    until = lambda: mod.load_queue()  # noqa: E731
 else:
     sys.exit(f"unknown scenario {scenario}")
 
 
 def on_alarm(*_):
     raise Stop()
+
+
+_orig_pending_wait = mod.pending_wait
+
+
+def check_then_wait(state, now):
+    """Called at the end of every main-loop pass, before its wait."""
+    if until and until():
+        raise Stop()
+    return _orig_pending_wait(state, now)
+
+
+mod.pending_wait = check_then_wait
 
 
 signal.signal(signal.SIGALRM, on_alarm)

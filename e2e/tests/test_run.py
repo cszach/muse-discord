@@ -492,19 +492,19 @@ class SUTTests(unittest.TestCase):
     def test_lifecycle_gateway_off_and_death(self):
         s = self.s
         s.start()
-        self.assertTrue(s.wait_ready(20))
+        self.assertTrue(s.wait_ready(20, poll=0.05))
         with open(os.path.join(s.pkg_dir, "env_seen.json")) as f:
             self.assertEqual(json.load(f), [])  # no secrets in its env
         s.restart(gateway=False)
-        self.assertTrue(s.wait_ready(20))
+        self.assertTrue(s.wait_ready(20, poll=0.05))
         self.assertIn("GATEWAY DISABLED", s.log_tail(5))
         s.restart(gateway=True)
-        self.assertTrue(s.wait_ready(20))
+        self.assertTrue(s.wait_ready(20, poll=0.05))
         s.stop(kill=True)
         self.assertFalse(s.alive())
         s.start(config=sut.deep_merge(self.cfg, {"testing": {"crash": True}}))
         with self.assertRaises(sut.SUTError):
-            s.wait_ready(20)
+            s.wait_ready(20, poll=0.05)
 
 
 class RunFlowBase(unittest.TestCase):
@@ -536,6 +536,7 @@ class RunFlowBase(unittest.TestCase):
         os.environ.update(self.ENV)
         FakeSUT.fail_ready = False
         FakeSUT.instances = []
+        self.fake_clock()
 
     def tearDown(self):
         for o, n, v in self.saved:
@@ -576,7 +577,7 @@ class RunFlowBase(unittest.TestCase):
                         self.assertNotIn(tok, text, name)
 
     def fake_clock(self):
-        """Runners made from now on sleep on a fake clock."""
+        """Runners sleep on a fake clock."""
         clock = [0.0]
         orig = self.R.Runner.__init__
 
@@ -646,7 +647,6 @@ class RunFlowTests(RunFlowBase):
         self.assert_no_tokens()
 
     def test_tier2_judge_and_converse(self):
-        self.fake_clock()
         self.guild.sut_limit = 3
         self.jd.VERDICT = {"verdict": "fail", "reason": "too chatty"}
         self.sc.SCENARIOS = [
@@ -699,7 +699,6 @@ class RunFlowTests(RunFlowBase):
         """A step that times out is a note: the scenario goes on and the
         checks decide."""
         self.guild.sut_limit = 0  # the SUT never answers
-        self.fake_clock()
         self.sc.SCENARIOS = [{"id": "s1", "tier": 1, "title": "t",
                               "steps": [
                                   {"send": {"as": "a", "text": "<@SUT> x",

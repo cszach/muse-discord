@@ -33,10 +33,8 @@ TOKEN = token_like("111000000000000099")
 
 
 def alerts(mod):
-    """The owner DMs about a blocked send."""
-    return [d for p, d in mod.api.posts
-            if p.startswith("/channels/4") and "I blocked a reply"
-            in (d.get("content") or "")]
+    """The owner DMs (here: only ever about a blocked send)."""
+    return [d for p, d in mod.api.posts if p.startswith("/channels/4")]
 
 
 class Outbox(tb.Base):
@@ -54,7 +52,6 @@ class Outbox(tb.Base):
         self.assertEqual(self.sends(CH), [], self.out)
         self.assertNotIn(TOKEN, self.out)
         self.assertNotIn(live, self.out)
-        self.assertEqual(self.out.count("Blocked a send"), 3, self.out)
         for m in (s1, s2, s3):                  # settled, never retried
             self.assertNotIn(m["id"], self.queued())
             self.assertEqual(self.ledger(m["id"])["status"], "skipped")

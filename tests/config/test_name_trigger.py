@@ -25,12 +25,10 @@ behavior:
 PROBE = r"""
 import importlib.util, io, json, os, sys, contextlib
 sys.argv = ["x", "dummy-token"]
-buf = io.StringIO()
-with contextlib.redirect_stdout(buf):
+with contextlib.redirect_stdout(io.StringIO()):
     spec = importlib.util.spec_from_file_location("monitor", sys.argv_repo)
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
-import_out = buf.getvalue()
 m.BOT_ID = m.BOT_USER_ID = "999"
 m.api_get = lambda path: (_ for _ in ()).throw(AssertionError(path))
 st = {"last_seen": {}, "replied_to": [], "history": {},
@@ -53,8 +51,7 @@ with open(m.STATE_FILE, "w") as f:
         "101:U1": {"kind": "name_drop", "channel_id": "101"},
         "101:U2": {"kind": "mention", "channel_id": "101"}}}, f)
 pending = sorted(m.load_state()["pending"])
-print(json.dumps({"import_out": import_out,
-                  "bare": bare_kind, "trigger_kind": m.trigger_kind(bare),
+print(json.dumps({"bare": bare_kind, "trigger_kind": m.trigger_kind(bare),
                   "direct": direct_kind, "pending": pending}))
 """
 

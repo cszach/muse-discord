@@ -157,13 +157,6 @@ class _Tool(unittest.TestCase):
 
 
 class OwnerDmChannel(_Tool):
-    def test_refused_without_the_nonce(self):
-        for args in self.every_subcommand(OWNER_DM) + self.every_subcommand(
-                OWNER_DM, ("--for", ITEM)):
-            rc = self.run_tool(*args)
-            self.assertNotEqual(rc, 0, args)
-            self.assertEqual(writes(), [], args)
-
     def test_refused_with_a_wrong_or_stale_nonce(self):
         for prefix in (("--for", ITEM, "--nonce", "0" * 32),
                        ("--for", ITEM, "--nonce", NONCE + "0"),
@@ -253,14 +246,15 @@ class OwnerCommandsOnly(_Tool):
     """Anywhere, not just an owner's DM: no valid owner --for, no act."""
 
     def test_refused_without_a_valid_owner_item(self):
-        bad = [(), ("--for", SRV_ITEM), ("--nonce", SRV_NONCE),
+        bad = [(), ("--for", SRV_ITEM), ("--for", ITEM),
+               ("--nonce", SRV_NONCE),
                ("--for", SRV_ITEM, "--nonce", "0" * 32),
                ("--for", SRV_ITEM, "--nonce", NONCE),     # another's
                # A stranger's open item, or one the monitor never
                # recorded as an owner's command.
                ("--for", STRANGER_ITEM, "--nonce", SRV_NONCE),
                ("--for", "1/../x", "--nonce", SRV_NONCE)]
-        for cid in (GEN_CH, OTHER_DM):
+        for cid in (GEN_CH, OTHER_DM, OWNER_DM):
             for prefix in bad:
                 for args in self.every_subcommand(cid, prefix):
                     self.assertNotEqual(self.run_tool(*args), 0, args)

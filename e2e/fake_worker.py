@@ -21,27 +21,19 @@ fragments), unless the item's text (any fragment) carries a directive:
   [[slow]]       wait 8 s before writing the outbox item
   [[say:<text>]] the reply goes on with " <text>" after `ack <n>` (the
                  never_share scenario plants a listed phrase this way)
-  [[settings:<op> <key>=<value> @<place>]]
-                 the reply carries a settings action (PROTOCOL.md,
-                 Settings requests) with this change: <op> is set,
-                 reset, add, remove, undo, preset, pause or resume;
-                 <place> is here (the item's channel), server (its
-                 server), dms or defaults (a literal place works too).
-                 reset and undo take no "=<value>"; preset takes the
-                 preset's name instead of <key>=<value>; add/remove
-                 take comma-separated ids. Several directives make
-                 several changes. The monitor decides what happens;
-                 the reply still says `ack <n>`.
   [[remind:<seconds> <note>]]
                  the reply carries a schedule action (PROTOCOL.md,
                  Reminders and watches) asking for a reminder that
-                 many seconds after the message; the reply still says
-                 `ack <n>`. The reminder item the monitor queues later
-                 (kind "reminder") is answered `reminder <k>`, k = the
-                 number of reminders it carries.
+                 many seconds after the message
+  [[watch:<word>]]
+                 the same action also adds a Discord watch for <word>
+                 in the item's channel
 
-Directives combine ([[slow]] [[long]] is a slow long reply); [[silent]]
-wins over the rest (a silent item carries no settings action).
+The reply to a schedule action still says `ack <n>`; a fire the
+monitor queues later (kind "reminder") is answered `reminder <k>`, k =
+the number of reminders and watches it carries. Directives combine
+([[slow]] [[long]] is a slow long reply); [[silent]] wins over the
+rest.
 
 Every queue item it handles is also recorded in
 <pkg>/e2e_worker_items.json (its ids, kind, follow_up, from_bot,
@@ -65,9 +57,8 @@ WORKER_ITEMS = "e2e_worker_items.json"
 WORKER_ITEMS_KEEP = 200
 FLAGS = ("silent", "long", "everyone", "mention_a", "slow")
 SAY_RE = re.compile(r"\[\[say:([^\]]*)\]\]")
-SETTINGS_RE = re.compile(r"\[\[settings:([^\]]*)\]\]")
 REMIND_RE = re.compile(r"\[\[remind:(\d+)(?: ([^\]]*))?\]\]")
-NO_NONCE = "0" * 32
+WATCH_RE = re.compile(r"\[\[watch:([^\]]+)\]\]")
 
 
 def load_json(path, default):
@@ -107,57 +98,11 @@ def directives(item):
     found = {d for d in FLAGS if f"[[{d}]]" in text}
     if SAY_RE.search(text):
         found.add("say")
-    if SETTINGS_RE.search(text):
-        found.add("settings")
     if REMIND_RE.search(text):
         found.add("remind")
+    if WATCH_RE.search(text):
+        found.add("watch")
     return found
-
-
-def settings_place(word, item):
-    """A directive's @<place> as the outbox's place syntax."""
-    gid, cid = item.get("guild_id"), item.get("channel_id")
-    if word == "here":
-        return f"channel:{gid}:{cid}" if gid else "dms"
-    if word == "server":
-        return f"server:{gid}" if gid else "dms"
-    return word
-
-
-def settings_change(text, item):
-    """One [[settings:...]] directive as an outbox change, or None."""
-    words = text.split()
-    if not words:
-        return None
-    change = {"op": words[0]}
-    for w in words[1:]:
-        if w.startswith("@"):
-            change["place"] = settings_place(w[1:], item)
-        elif change["op"] == "preset":
-            change["name"] = w
-        else:
-            key, eq, value = w.partition("=")
-            change["key"] = key
-            if eq:
-                if change["op"] in ("add", "remove") \
-                        and key != "style.notes":
-                    value = [v for v in value.split(",") if v]
-                change["value"] = value
-    return change
-
-
-def settings_changes(item):
-    """Every distinct [[settings:...]] directive, in order."""
-    out, seen = [], set()
-    for raw in SETTINGS_RE.findall(item_texts(item)):
-        raw = raw.strip()
-        if raw in seen:
-            continue
-        seen.add(raw)
-        c = settings_change(raw, item)
-        if c:
-            out.append(c)
-    return out
 
 
 def say_text(item):
@@ -237,17 +182,17 @@ def build_reply(item, a_id=None):
             text += filler
         text = text[:LONG_CHARS]
     out["text"] = text
-    if "settings" in flags and settings_changes(item):
-        # The nonce comes in an owner-DM-only wake's payload; this
-        # worker reads the queue file, which never has it, so its
-        # actions only ever test the monitor's refusals.
-        out["settings"] = {"v": 1, "nonce": item.get("owner_dm_nonce")
-                           or NO_NONCE, "changes": settings_changes(item)}
+    changes = []
     if "remind" in flags:
         secs, note = REMIND_RE.search(item_texts(item)).groups()
-        out["schedule"] = {"v": 1, "changes": [
-            {"op": "add", "kind": "remind", "after": int(secs),
-             "note": (note or "").strip()}]}
+        changes.append({"op": "add", "kind": "remind", "after": int(secs),
+                        "note": (note or "").strip()})
+    if "watch" in flags:
+        word = WATCH_RE.search(item_texts(item)).group(1).strip()
+        changes.append({"op": "add", "kind": "watch", "note": word,
+                        "match": {"words": [word], "in": "here"}})
+    if changes:
+        out["schedule"] = {"v": 1, "changes": changes}
     return out, delay
 
 

@@ -7,7 +7,6 @@ config.yaml value the overlay overrides; a hidden "answer" value; and
 (on request) an unreadable overlay. Writes go through muse_settings
 into a temp dir, as the monitor's SettingsCtx does.
 MUT_DIR = the package tree under test."""
-import copy
 import json
 import os
 import sys
@@ -109,10 +108,6 @@ servers:
     name: Study Group
     privacy:
       suspicious: answer
-"""
-PLAIN = f"""version: 1
-owners: ["{OWNER}"]
-token_from: env:MUSE_TEST_TOKEN
 """
 
 
@@ -281,11 +276,12 @@ class FakeCtx:
         self.refresh()
 
     # -- the Ctx ------------------------------------------------------------
+    # Copies (the fixture dicts are flat), so a caller cannot change them.
     def guilds(self):
-        return copy.deepcopy(self._guilds)
+        return [dict(g) for g in self._guilds]
 
     def channels(self, gid):
-        return copy.deepcopy(self._channels.get(str(gid), []))
+        return [dict(c) for c in self._channels.get(str(gid), [])]
 
     def apply(self, changes, by, role, group=None, admin_gid=None):
         self.applied.append((list(changes), by, role, admin_gid))

@@ -1,0 +1,30 @@
+# Reminders and Discord watches, end to end on real Discord. The fake
+# worker answers q1 "ack 1" with one schedule action: a reminder 60 s
+# after q1 (the shortest there is) and a watch for "pizza" in this
+# channel. B's p1 then matches the watch: the monitor checks, against
+# the real server's members and permissions, that A can read the
+# channel, and queues a fire. Later the reminder comes due. The fake
+# worker answers each fire "reminder 1", and the monitor sends both
+# threaded under q1, pinging A only. p1 itself is never answered.
+# Catches: a reminder that never fires, fires twice, or comes back
+# unthreaded or elsewhere; a watch that never matches (say, the
+# permission data for a new channel missing) or that answers the
+# matched message.
+id: reminders_watches
+tier: 1
+title: "A reminder and a watch each fire once, under the request"
+steps:
+  - send: { as: a, text: "<@SUT> [[remind:60 check the oven]] [[watch:pizza]] remind me in a minute, and tell me when someone says pizza", label: q1 }
+  - wait_for: { sut_messages: 1, timeout: 60 }
+  - send: { as: b, text: "who wants pizza tonight?", label: p1 }
+  - wait_for: { sut_messages: 3, timeout: 150 }
+expect:
+  settle: 8
+  checks:
+    - sut_reply_count: { eq: 3 }
+    - replies_to: q1
+    - no_sut_reply_to: p1
+    - content_matches: { label: q1, pattern: "^(ack 1|reminder 1)$" }
+    - no_duplicate_replies: true
+    - ledger_status: { label: q1, status: replied }
+    - log_contains: "^Reminders and watches for [0-9]+ \\(item [0-9]+\\): add r.*add w"

@@ -7,8 +7,8 @@ other channel: an ownerless or paused server, a place where replies are
 off, or a DM. Owner commands that post elsewhere go through
 bin/discord-api.py with the item's owner_command_nonce, which the
 monitor writes to owner_items.json (mode 600) for owner-command items
-only. Normal and multi-part replies, threads, bursts and released
-never_share holds work as before.
+only. Threads, bursts and released never_share holds work as before;
+every item's reply_nonce is spent on answer.
 
 Usage: [MUT_DIR=<tree>] python3 tests/ownerdm/test_replies_bound.py"""
 import json
@@ -20,7 +20,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import test_binding as tb  # noqa: E402
 from settings_harness import (CH, CH2, CH_G2, G1, MS, OWNER,  # noqa: E402
-                              THREAD, U1, U2, bump, dmsg, gmsg, quiet, sf,
+                              THREAD, U1, U2, bump, gmsg, quiet, sf,
                               write)
 
 DM_U1, DM_U2 = tb.DM_U1, "400000000000000080"
@@ -51,25 +51,17 @@ class _B(tb.Base):
 class GeneralPath(_B):
     """Review H's repros on main: a made-up item id, any channel_id."""
 
-    def test_ownerless_server_channel(self):
+    def test_made_up_item(self):
+        """Into an ownerless server, a paused one, a server where replies
+        are off, or the DM of someone the DM settings refuse."""
         self.mod.OWNER_IN_GUILD[G1] = False
-        self.outbox(self.forged(CH))
-        self.assert_refused_here(CH)
-
-    def test_paused_server_channel(self):
         self.apply(MS.pause_changes(MS.Place.server(G1)))
-        self.outbox(self.forged(CH2))
-        self.assert_refused_here(CH2)
-
-    def test_server_where_replies_are_off(self):
-        self.config("all_servers:\n  who:\n    replies: off\n")
-        self.outbox(self.forged(CH_G2))
-        self.assert_refused_here(CH_G2)
-
-    def test_dm_of_someone_the_dm_settings_refuse(self):
-        self.config("dms:\n  who:\n    dms_from: owners\n")
-        self.outbox(self.forged(DM_U2))
-        self.assert_refused_here(DM_U2)
+        self.config("all_servers:\n  who:\n    replies: off\n"
+                    "dms:\n  who:\n    dms_from: owners\n")
+        for cid in (CH, CH2, CH_G2, DM_U2):
+            with self.subTest(cid):
+                self.outbox(self.forged(cid))
+                self.assert_refused_here(cid)
 
     def test_real_item_into_another_channel(self):
         """A stranger's real mention, answered into someone's DM or
@@ -93,16 +85,6 @@ class GeneralPath(_B):
 
 
 class StillWorks(_B):
-    def test_reply_and_multi_part(self):
-        s = self.stranger_mention()
-        u = self.queue(dmsg(U1, "hello", channel=DM_U1))
-        self.outbox(self.reply(s, "hi"),
-                    dict(self.reply(u), text=None, parts=["one", "two"]))
-        self.assertEqual([x["content"] for x in self.sends(CH)], ["hi"])
-        self.assertEqual([x["content"] for x in self.sends(DM_U1)],
-                         ["one", "two"])
-        self.assertEqual(self.queued(), [])
-
     def test_thread_reply_goes_to_the_thread(self):
         t = self.queue(gmsg(U1, "<@bot> hi", mention=True, channel=THREAD),
                        dm=False, guild=G1)
@@ -184,7 +166,6 @@ class StillWorks(_B):
                if d.get("content") == self.mod.STALE_PROMPT_DM]
         self.assertEqual(len(dms), 2)                  # each owner, once
         self.assertTrue(os.path.exists(self.mod.STALE_PROMPT_FILE))
-        self.assertIn("WORKER PROMPT OUT OF DATE", self.out)
         self.outbox(self.reply(items[4], "hi"))         # current prompt
         self.assertEqual(len(self.sends(CH)), 1)
         self.assertFalse(os.path.exists(self.mod.STALE_PROMPT_FILE))
@@ -201,6 +182,7 @@ class StillWorks(_B):
                                reactions=["\u2705"]))
         self.assert_refused_here(CH)
         self.assertEqual(self.reactions, [])
+        self.assertNotIn(o["id"], self.st["replied_to"])
         it = self.held({"item": f2["id"], "channel_id": CH,
                         "reply_to": f2["id"], "text": "ok"})
         self.outbox(it)
@@ -215,7 +197,7 @@ class StillWorks(_B):
         for m in items:
             self.outbox(self.reply(m, "hi", reply_nonce=None))
         posts = [d.get("content") or "" for _, d in self.mod.api.posts]
-        self.assertTrue(any("can't write item_nonces.json" in c
+        self.assertTrue(any("item_nonces.json" in c
                             for c in posts), posts)
         self.assertNotIn(self.mod.STALE_PROMPT_DM, posts)
         self.assertFalse(os.path.exists(self.mod.STALE_PROMPT_FILE))

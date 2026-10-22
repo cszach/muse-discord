@@ -51,11 +51,6 @@ def snowflake_time(snowflake):
     return ((int(snowflake) >> 22) + DISCORD_EPOCH_MS) / 1000.0
 
 
-def time_snowflake(epoch_secs):
-    """The smallest Discord id at the given epoch time."""
-    return str(max(0, int(epoch_secs * 1000) - DISCORD_EPOCH_MS) << 22)
-
-
 def _multipart(payload, files):
     """Encode payload_json plus files[n] as multipart/form-data."""
     boundary = "e2e" + uuid.uuid4().hex

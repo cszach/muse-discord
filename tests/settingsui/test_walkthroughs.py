@@ -204,17 +204,11 @@ class Admin(Base):
         for c in H.controls(r):
             self.assertNotIn(":conversational", c["custom_id"])
             self.assertFalse(c["custom_id"].endswith(":on"))
-        before = self.ctx.overlay()
-        self.admin(f"{P}val:c{G1}.{MUSECHAT}:r:conversational")
-        self.assertEqual(self.ctx.overlay(), before)        # refused
+        # (Refusals and the owners' notice: test_security.AdminForgery.)
         r = self.admin(f"{P}val:c{G1}.{MUSECHAT}:r:off")
         self.assertEqual(self.val("who.replies", MC), "off")
-        key = f'servers."{G1}".channels."{MUSECHAT}".replies'
-        self.assertEqual(self.ctx.overlay()["values"][key]["role"], "admin")
-        self.assertEqual(self.ctx.notified[-1][:3], (G1, ADMIN, key))
         self.admin(control(r, "un")["custom_id"])
         self.assertNotEqual(self.val("who.replies", MC), "off")
-
 
     def test_admin_turns_back_on_what_an_admin_turned_off(self):
         """Review E #6: images & video turned off by an admin can be

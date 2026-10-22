@@ -367,6 +367,8 @@ def head_of(text):
 
 
 class Watchdog(unittest.TestCase):
+    """Real watchdog.sh runs; the tests run at once (load_tests)."""
+
     def setUp(self):
         self.d = tmpdir("wd_")
         self.origin = os.path.join(self.d, "origin.git")
@@ -447,38 +449,30 @@ class Watchdog(unittest.TestCase):
         return [ln for ln in out.splitlines() if ln.startswith("UPDATE:")]
 
     def test_unreleased_install_offered_latest(self):
+        """The newest release (semver order, a lightweight tag) and its
+        entry only; tags that are not releases ignored; an action
+        starting "None" is no action."""
+        e110 = entry("v1.10.0", "2026-10-21", "Ten",
+                     "None; the monitor restarts with the update.")
         self.release(V0, E100)
-        self.release(V1, E110)
-        self.release(V2, E120, annotated=False)
-        out = self.run_wd()
-        self.assertEqual(len(self.update_lines(out)), 1, out)
-        c = self.check()
-        self.assertEqual(c["latest"], V2)
-        self.assertEqual(c["installed"], "unreleased")
-        self.assertEqual(c["announced"], V2)
-        self.assertEqual(c["entries"], [head_of(E120)])
-        self.assertFalse(c["action_needed"])
-        self.assertNotIn("upstream", c)
-        self.assertNotIn("behind", c)
-        self.assertIsInstance(c["checked"], int)
-        # Only the latest tag was fetched.
-        self.assertTrue(self.has_tag(V2))
-        self.assertFalse(self.has_tag(V1))
-        self.assertFalse(self.has_tag(V0))
-        # Tags that are not releases are ignored.
-        self.tearDown()
-        self.setUp()
-        self.release("v1.9.0", entry("v1.9.0", "2026-10-20", "Nine"))
-        self.release("v1.10.0", entry("v1.10.0", "2026-10-21", "Ten",
-                                      "Do a thing."))
+        self.release("v1.9.0", entry("v1.9.0", "2026-10-20", "Nine",
+                                     "Do a thing."))
+        self.release("v1.10.0", e110, annotated=False)
         self.tag_only("v1.11.0-rc.1", "v2", "v1.12", "v01.13.0", "1.14.0",
                       "release-15", "v2.0.0-beta", "v3.0.0.1", "nightly")
         out = self.run_wd()
         self.assertEqual(len(self.update_lines(out)), 1, out)
         c = self.check()
         self.assertEqual(c["latest"], "v1.10.0")
-        self.assertEqual(c["entries"], ["v1.10.0 (2026-10-21): Ten"])
-        self.assertTrue(c["action_needed"])
+        self.assertEqual(c["installed"], "unreleased")
+        self.assertEqual(c["announced"], "v1.10.0")
+        self.assertEqual(c["entries"], [head_of(e110)])
+        self.assertFalse(c["action_needed"])
+        self.assertIsInstance(c["checked"], int)
+        # Only the latest tag was fetched.
+        self.assertTrue(self.has_tag("v1.10.0"))
+        self.assertFalse(self.has_tag("v1.9.0"))
+        self.assertFalse(self.has_tag(V0))
 
     def test_installed_offered_newer_with_entries(self):
         self.release(V0, E100)
@@ -627,11 +621,10 @@ class Hook(unittest.TestCase):
 
     def test_wakes_once_per_request(self):
         out, _ = self.run_hook()
-        self.assertTrue(out.startswith("SILENT: no update requested"), out)
+        self.assertTrue(out.startswith("SILENT:"), out)
         self.request()
         out, _ = self.run_hook()
-        self.assertTrue(out.startswith("WAKE: muse-discord update "
-                                       "requested"), out)
+        self.assertTrue(out.startswith("WAKE:"), out)
         payload = json.loads(out.splitlines()[1])
         self.assertEqual(payload["request"], {"version": V1,
                                               "requested_at": 1000,
@@ -642,8 +635,7 @@ class Hook(unittest.TestCase):
             self.assertEqual(list(json.load(f)["handed"]), [f"{V1}:1000"])
         for _ in range(3):
             out, _ = self.run_hook()
-            self.assertTrue(out.startswith("SILENT: update already handed"),
-                            out)
+            self.assertTrue(out.startswith("SILENT:"), out)
         # A newer version requested (after a newer DM): a new wake.
         self.request(V2, 2000)
         out, _ = self.run_hook()
@@ -660,7 +652,7 @@ class Hook(unittest.TestCase):
         # Muse deleted the file when done.
         os.unlink(os.path.join(self.pkg, "update_request.json"))
         out, _ = self.run_hook()
-        self.assertTrue(out.startswith("SILENT: no update requested"), out)
+        self.assertTrue(out.startswith("SILENT:"), out)
         self.assertFalse(os.path.exists(self.git_marker))
         # A lease that expired (the run died): handed out again, once.
         os.remove(self.state)

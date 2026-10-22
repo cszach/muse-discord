@@ -113,10 +113,8 @@ class Shipped(unittest.TestCase):
 
 
 class Invalid(unittest.TestCase):
-    def test_base_is_valid(self):
-        scenario.validate(base())
-
     def test_broken_scenarios_are_rejected_naming_the_field(self):
+        scenario.validate(base())   # each case below breaks one thing
         def make(change):
             sc = copy.deepcopy(base())
             change(sc)

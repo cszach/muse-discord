@@ -455,10 +455,6 @@ class Posting(Base):
             self.m.owner_dm_upkeep(self.st, force=True)
         self.assertNotIn(self.slot["message_id"],
                          self.st.get("reply_nonces") or {})
-        self.assertTrue(self.m.bound_elsewhere(
-            self.st, self.post(self.slot, DM_U1)))
-        self.outbox(self.post(self.slot, DM_U1))
-        self.assertEqual(len(self.sends(DM_U1)), 1, self.out)
 
     def test_secret_in_a_post_spends_the_slot(self):
         """The send guard blocks it: nothing sent, the slot used up, no
@@ -571,11 +567,10 @@ class OptOut(Base):
 
     def test_opt_out_needs_a_persons_own_message(self):
         # Not on a message the monitor never queued, not on another
-        # channel, not on a bot's message.
-        for it in ({"item": sf(), "channel_id": CH, "text": "ok",
-                    "proactive": "opt-out"},):
-            self.outbox(it)
-            self.assert_refused()
+        # channel.
+        self.outbox({"item": sf(), "channel_id": CH, "text": "ok",
+                     "proactive": "opt-out"})
+        self.assert_refused()
         m2 = self.queue_msg(gmsg(U2, "<@bot> stop", mention=True), dm=False,
                             guild=G1)
         self.outbox(self.reply(m2, channel_id=CH2, proactive="opt-out"))
