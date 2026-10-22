@@ -30,6 +30,11 @@ def describe(i, r):
     note = f'  "{r["note"]}"' if r.get("note") else ""
     if r.get("kind") == "remind":
         what = f"remind  due {W.iso(r.get('due', 0))}"
+    elif r.get("kind") == "watch-web":
+        every = ", every time" if r.get("repeat") else ""
+        what = (f"web     \"{r.get('what')}\" checked every "
+                f"{int(r.get('every') or 0) // 60} min until "
+                f"{W.iso(r.get('until', 0))}{every}")
     else:
         words = ", ".join(f'"{w}"' for w in r.get("words") or [])
         every = ", every time" if r.get("every") else ""
@@ -53,18 +58,19 @@ def main(argv=None):
             print(json.dumps(live, indent=1, sort_keys=True))
         elif not live:
             print("No reminders or watches.")
-        for i, r in sorted(live.items(), key=lambda kv: kv[1].get(
-                "due") or kv[1].get("until", 0)):
-            if not args.json:
+        else:
+            for i, r in sorted(live.items(), key=lambda kv: kv[1].get(
+                    "due") or kv[1].get("until", 0)):
                 print(describe(i, r))
         return 0
+    ids = list(dict.fromkeys(args.ids))   # an id named twice is one
     with store.edit() as data:
-        missing = [i for i in args.ids if i not in data["items"]]
+        missing = [i for i in ids if i not in data["items"]]
         if missing:
             print(f"Not found (nothing changed): {', '.join(missing)}",
                   file=sys.stderr)
             return 1
-        for i in args.ids:
+        for i in ids:
             print(f"Cancelled: {describe(i, data['items'].pop(i))}")
     return 0
 

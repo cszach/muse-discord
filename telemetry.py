@@ -254,33 +254,19 @@ def features(st, ms):
         "daily_cap": onoff(get("limits.per_day", E) is not None),
         "per_person_cap": onoff(
             get("limits.per_person_per_day", E) is not None),
+        "media": onoff(get("media.enabled", A) or get("media.enabled", E)),
     }
     try:
         raw["presence"] = onoff(st.presence_enabled)
         raw["update_notices"] = onoff(st.updates_notify)
     except Exception:
         pass
-    for name, keys in (("media", ("media.enabled",)),):
-        for key in keys:
-            try:
-                if st.spec(key) is None:
-                    continue
-            except Exception:
-                continue
-            raw[name] = onoff(get(key, A) or get(key, E))
-            break
     for name, allowed in FEATURES.items():
         v = raw.get(name)
         if v is None:
             continue
         out[name] = v if isinstance(v, str) and v in allowed else "other"
     return out
-
-
-def _line_id(h):
-    return json.dumps([h.get("key"), h.get("at"), h.get("by"),
-                       h.get("group"), h.get("to"), bool(h.get("undo"))],
-                      sort_keys=True, default=str)
 
 
 def _is_id(v):
@@ -341,24 +327,6 @@ def preset_of(lines, st, ms):
     return None
 
 
-def new_history(doc, mark):
-    """(history lines after mark, new mark). The first time (mark None)
-    nothing counts: only the position is taken."""
-    hist = [h for h in (doc or {}).get("history") or []
-            if isinstance(h, dict)]
-    ids = [_line_id(h) for h in hist]
-    last = {"id": ids[-1] if ids else None,
-            "at": str(hist[-1].get("at") or "") if hist else None}
-    if not isinstance(mark, dict):
-        return [], last
-    if mark.get("id") in ids:
-        new = hist[len(ids) - ids[::-1].index(mark["id"]):]
-    else:
-        after = str(mark.get("at") or "")
-        new = [h for h in hist if str(h.get("at") or "") > after]
-    return new, last
-
-
 def count_history(rec, lines, st, ms):
     """Add settings changes (by source) and presets applied to rec."""
     groups = {}
@@ -384,9 +352,10 @@ def build_payload(rec, install_id):
                if _NAME_RE.match(str(k)) and int(v) > 0}
     lat = rec.get("latency") or {}
     version = str(g.get("version") or "unknown")
-    if version not in ("unreleased", "unknown") \
-            and not _SEMVER_RE.match(version):
+    release = bool(_SEMVER_RE.match(version))
+    if not release and version != "unreleased":
         version = "unknown"
+    os_ = g.get("os") or os_family()
     feats = {k: v for k, v in (g.get("features") or {}).items()
              if k in FEATURES and (v in FEATURES[k] or v == "other")}
     return {
@@ -397,12 +366,10 @@ def build_payload(rec, install_id):
         # Past the release, or edited: lets reports from main or a
         # customized copy be told apart from the release itself.
         "ahead": max(0, min(int(g.get("ahead") or 0), 100_000))
-        if _SEMVER_RE.match(version) else 0,
-        "modified": bool(g.get("modified"))
-        if _SEMVER_RE.match(version) else False,
+        if release else 0,
+        "modified": release and bool(g.get("modified")),
         "python": str(g.get("python") or python_minor())[:8],
-        "os": (g.get("os") or os_family())
-        if (g.get("os") or os_family()) in OS_FAMILIES else "other",
+        "os": os_ if os_ in OS_FAMILIES else "other",
         "servers": max(0, int(g.get("servers") or 0)),
         "members_bucket": members_bucket(g.get("members") or 0),
         "messages_seen": int(rec.get("messages_seen", 0)),
@@ -723,8 +690,8 @@ class Recorder:
             if not on:
                 rec["off"] = True
                 d["pending"] = []   # days of an install that is off now
-            if st is not None:
-                lines, d["history_mark"] = new_history(
+            if st is not None and self.ms is not None:
+                lines, d["history_mark"] = self.ms.history_since(
                     getattr(st, "overlay_doc", None), d.get("history_mark"))
                 count_history(rec, lines, st, self.ms)
             counts = [v for v in (member_counts or {}).values()
@@ -806,13 +773,3 @@ class Recorder:
                           "refused": len(dropped),
                           "ok": not d["pending"]}
         self._flush_locked()
-
-
-class _Null:
-    """Stands in for a Recorder when telemetry.py cannot be loaded."""
-
-    def __getattr__(self, name):
-        return lambda *a, **kw: None
-
-
-NULL = _Null()

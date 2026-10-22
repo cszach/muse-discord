@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""/settings in Discord, the moderate design: one screen with a few
-direct settings and one level of "Where". As one pure function of an interaction and a Ctx (see handle).
-monitor.py owns the plumbing (registering the commands, routing "mdset:"
-interactions here, building the Ctx, answering Discord); this module
-never touches the network, so it answers well inside Discord's 3
-seconds, and it never raises.
+"""/settings in Discord: one screen with a few direct settings and a
+Where select, as one pure function of an interaction and a Ctx (see
+handle). monitor.py owns the plumbing (registering the commands,
+routing "mdset:" interactions here, building the Ctx, answering
+Discord); this module never touches the network, so it answers well
+inside Discord's 3 seconds, and it never raises.
 
 What each person gets:
 
@@ -44,7 +44,8 @@ custom_id grammar ("mdset:3:" + colon-separated parts, <= 100 chars):
     ppl:<place>:ig           admins: add to the ignore list
     rm:<place>:ig            admins: take their additions off it
     pz:<place> | rs:<place>  pause / resume
-    un:<place>[:<grp>]       undo the newest group there (+ channels)
+    un:<place>:<grp>         undo the newest group there (+ channels),
+                             if it is still <grp>
     ok:<place>:<tok>         apply what a confirm card stashed
     fx:<place>:<k>:<op>      a "Why no reply?" fix: = | v<value>
                              | -<id> | +<id>
@@ -92,7 +93,7 @@ CATEGORY = 4
 
 # Component types and button styles.
 ROW, BUTTON, STRING_SELECT, TEXT_INPUT = 1, 2, 3, 4
-USER_SELECT, ROLE_SELECT, MENTIONABLE_SELECT, CHANNEL_SELECT = 5, 6, 7, 8
+USER_SELECT, MENTIONABLE_SELECT = 5, 7
 SECTION, TEXT, SEPARATOR, CONTAINER, LABEL = 9, 10, 14, 17, 18
 PRIMARY, SECONDARY, SUCCESS, DANGER = 1, 2, 3, 4
 
@@ -113,8 +114,8 @@ APOLOGY = ("Sorry, something went wrong with /settings. Nothing was "
            "changed by this click; try again in a moment.")
 ADMIN_ONLY_QUIETER = ("Server admins can make the bot quieter here, never "
                       "louder. Ask one of the bot's owners for that.")
-OVERLAY_BROKEN = ("⚠ config.discord.yaml can't be read, so changes from "
-                  "Discord are paused. Fix it on the bot's machine.")
+OVERLAY_BROKEN = ("⚠ I can't read config.discord.yaml, so changes from "
+                  "Discord are paused. Ask your Muse to fix that file.")
 ROLES_ELSEWHERE = ("Roles only count in their own server, so the roles "
                    "you picked were left out.")
 FIXED_NOTE = "-# Fixed. {who} must send again; refused messages stay " \
@@ -218,9 +219,7 @@ def ptok(place):
 # ---------------------------------------------------------------------------
 # Components
 # ---------------------------------------------------------------------------
-def clip(text, n):
-    text = str(text)
-    return text if len(text) <= n else text[:n - 1] + "…"
+clip = ms.clip
 
 
 _MD = re.compile(r"([\\*_~|>#\[\]()`])")
@@ -487,7 +486,7 @@ class Req:
         self.new = False
         self.banner = None
         self.extra_names, self.extra_users = _harvest_names(ix)
-        self._guilds = None
+        self.inf = ms._Info(ctx)
         self._chans = {}
         self.fixed = None       # whose refusal a Why fix just fixed
         self.check = None       # DMs: the person checked
@@ -517,45 +516,23 @@ class Req:
 
     # -- the directory ------------------------------------------------------
     def guilds(self):
-        if self._guilds is None:
-            out = {}
-            try:
-                raw = self.ctx.guilds() or []
-            except Exception:
-                raw = []
-            for g in raw:
-                if isinstance(g, dict) and g.get("id"):
-                    out[str(g["id"])] = g
-            self._guilds = out
-        return self._guilds
+        return self.inf.guilds()
 
     def channels(self, gid):
         gid = str(gid)
         if gid not in self._chans:
-            out = {}
-            try:
-                raw = self.ctx.channels(gid) or []
-            except Exception:
-                raw = []
-            for c in raw:
-                if isinstance(c, dict) and c.get("id"):
-                    out[str(c["id"])] = c
-            self._chans[gid] = out
+            self._chans[gid] = {str(c["id"]): c
+                                for c in self.inf.channels(gid) or []}
         return self._chans[gid]
 
     def chan(self, gid, cid_):
         return self.channels(gid).get(str(cid_))
 
     def category_of(self, gid, cid_):
-        ch = self.chan(gid, cid_) or {}
-        parent = str(ch.get("parent_id") or "") or None
-        if parent and (self.chan(gid, parent) or {}).get("type") == CATEGORY:
-            return parent
-        return None
+        return self.inf.category_of(gid, cid_)
 
     def members(self, gid):
-        n = (self.guilds().get(str(gid)) or {}).get("member_count")
-        return n if isinstance(n, int) and not isinstance(n, bool) else None
+        return self.inf.members(gid)
 
     def can_see(self, gid, cid_):
         """False when the bot cannot read the channel."""
@@ -673,45 +650,12 @@ class Val:
         self.path = ms.place_path(st, place, key)
         self.set, self.here, self.src = st.layer(self.path, key)
         self.value = ms.place_value(st, place, key)
-        sc = _scope_at(place, key, self.path)
-        self.inherited = copy_default(key) if sc is None \
-            else st.value_without(sc, key, self.path)
-
-
-def copy_default(key):
-    spec = ms.TOP.get(key) or ms.CORE.get(key)
-    return spec.default if spec is not None else None
-
-
-def _scope_at(place, key, path=None):
-    """The Scope key resolves in at place (None: bot-wide)."""
-    if path is not None and place.kind == "defaults":
-        return {("everywhere",): ms.Scope.everywhere(),
-                ("all_servers",): ms.Scope("all_servers"),
-                ("dms",): ms.Scope.dm()}.get(path)
-    return place.scope(key)
+        self.inherited = st.value_without(
+            ms._scope_for(place, key, self.path), key, self.path)
 
 
 def value(R, place, key):
-    sc = _scope_at(place, key)
-    return R.st.top(key) if sc is None else R.st.get(key, sc)
-
-
-def vl(R, key, v):
-    """A value in plain words."""
-    return ms.value_label(key, v, R.look)
-
-
-def mention_list(value, limit=10):
-    out = []
-    for p in value if isinstance(value, list) else []:
-        p = str(p)
-        out.append(f"<@&{p[5:]}>" if p.startswith("role:") else f"<@{p}>")
-    if not out:
-        return "nobody"
-    more = len(out) - limit
-    out = out[:limit]
-    return ", ".join(out) + (f" and {more} more" if more > 0 else "")
+    return ms.place_value(R.st, place, key)
 
 
 def short_date(at):
@@ -912,14 +856,9 @@ def say_change(R, place, key, old, new, path=None):
 def say_undo(R, plan):
     """What an Undo of plan would make, as "In #general, Replies back to
     chat freely"."""
-    sim = ms.simulate(R.st, plan)
-    parts = []
-    for ch in plan:
-        sc = _scope_at(ch.place, ch.key, ch.path)
-        new = sim.top(ch.key) if sc is None else sim.get(ch.key, sc)
-        parts.append(f"{ui_where(R, ch.place, ch.path)}, "
-                     f"{ui_label(ch.key)} back to {ui_value(R, ch.key, new)}")
-    return "; ".join(parts)
+    return "; ".join(f"{ui_where(R, ch.place, ch.path)}, {ui_label(ch.key)} "
+                     f"back to {ui_value(R, ch.key, new)}"
+                     for ch, new in ms.undo_results(R.st, plan))
 
 
 # ---------------------------------------------------------------------------
@@ -1454,14 +1393,16 @@ def setter_name(R, place):
     return R.name(place)
 
 
-def _fix_button(R, label, place, key, op, changes=None):
+def _fix_button(R, label, place, key, op):
+    """A Why fix button (fx), shown only when the viewer may make the
+    changes it makes (fix_changes)."""
     if place is None or is_category(R, place):
         return None
-    if changes is not None and not _may_fix(R, changes):
-        return None
     try:
+        if not _may_fix(R, fix_changes(R, place, key, op) or []):
+            return None
         return btn(label, cid("fx", ptok(place), kcode(key), op))
-    except BadId:
+    except (BadId, ms.SettingsError):
         return None
 
 
@@ -1494,22 +1435,18 @@ def explain_outcome(R, o):
         s, _v, src = R.st.layer(path, "who.replies")
         by = f" (by {who_text(R, src[1])})" if src and src[0] == \
             "discord" else ""
-        ch = [ms.Change(setter, "who.replies", "inherit")]
         return (f"I'm off in {setter_name(R, setter)}{by}.",
                 _fix_button(R, "Turn me back on", setter, "who.replies",
-                            "=", ch), True)
+                            "="), True)
     if code == "bots-ignore":
         cur = R.st.get("who.bots", sc)
         if cur != "ignore":
             return ("I ignored other bots then.\n-# Not any more: I answer "
                     "bots that address me now."), None, False
         setter, _p = _setter(R, sc, "who.bots")
-        ch = [ms.Change(setter, "who.bots", "when-addressed")] \
-            if setter else None
         return (f"I ignore other bots in {setter_name(R, setter)}.",
                 _fix_button(R, "Answer bots that @mention me", setter,
-                            "who.bots", "vwhen-addressed", ch)
-                if setter else None, True)
+                            "who.bots", "vwhen-addressed"), True)
     if code in ("not-allowed", "dm-not-allowed") and _ID.fullmatch(aid):
         ign = R.st.get("who.ignore", sc) or []
         if aid in ign:
@@ -1525,22 +1462,16 @@ def explain_outcome(R, o):
                              f"{short_date(src[2])})")
                 elif src and src[0] == "file":
                     added = " (in config.yaml)"
-            fix = None
-            if setter is not None:
-                ch = fix_changes(R, setter, "who.ignore", f"-{aid}")
-                fix = _fix_button(R, f"Stop ignoring {plain(short)}",
-                                  setter, "who.ignore", f"-{aid}", ch)
+            fix = _fix_button(R, f"Stop ignoring {plain(short)}", setter,
+                              "who.ignore", f"-{aid}")
             return (f"I ignore {who_m} in {setter_name(R, setter)}"
                     f"{added}.", fix, True)
         allow = R.st.get("who.allow", sc)
         if isinstance(allow, list) and aid not in allow \
                 and aid not in R.ctx.owners:
             setter, _p = _setter(R, sc, "who.allow")
-            fix = None
-            if setter is not None:
-                ch = [ms.Change(setter, "who.allow", list(allow) + [aid])]
-                fix = _fix_button(R, f"Let {plain(short)} talk to me",
-                                  setter, "who.allow", f"+{aid}", ch)
+            fix = _fix_button(R, f"Let {plain(short)} talk to me", setter,
+                              "who.allow", f"+{aid}")
             return (f"In {setter_name(R, setter)} I only answer people on "
                     f"a list, and {who_m} isn't on it.", fix, True)
         if code == "dm-not-allowed":
@@ -1605,13 +1536,10 @@ def explain_outcome(R, o):
                     "dropped it.\n-# Not any more: I hold those for your "
                     "review now."), None, False
         setter, _p = _setter(R, sc, "privacy.suspicious")
-        ch = [ms.Change(setter, "privacy.suspicious", "hold-for-review")] \
-            if setter else None
         return ("It looked like a prompt-injection attempt, so I dropped "
-                "it.",
-                _fix_button(R, "Hold these for my review", setter,
-                            "privacy.suspicious", "vhold-for-review", ch)
-                if setter else None, True)
+                "it.", _fix_button(R, "Hold these for my review", setter,
+                                   "privacy.suspicious", "vhold-for-review"),
+                True)
     if R.admin and code in ("quarantined", "never-share"):
         return "I held it for my owners to look at.", None, True
     text = {
@@ -1621,9 +1549,11 @@ def explain_outcome(R, o):
                      "nobody here. An owner must turn replies on here.",
         "no-send": f"I can't send messages in {where}; fix it in "
                    f"Discord's channel permissions.",
-        "internal": "I hit an internal error; see monitor.log.",
+        "internal": "I hit an internal error; your Muse can find it in "
+                    "monitor.log.",
         "worker-skipped": "I read it and chose not to answer.",
-        "send-failed": "Sending my reply failed; see monitor.log.",
+        "send-failed": "Sending my reply failed; your Muse can find why "
+                       "in monitor.log.",
         "never-share": "I held my reply: it contained a phrase you never "
                        "share.",
     }.get(code, "I didn't answer it.")
@@ -1977,7 +1907,9 @@ def render(R, place, page):
     return page_home(R, place)
 
 
-def show(R, place, page):
+def show(R, place, page, banner=None):
+    if banner is not None:
+        R.banner = banner
     return message(R, render(R, place, page))
 
 
@@ -1986,7 +1918,7 @@ def shown(R, fallback):
     the Why page has a Back (pg:<place>:h); the home page a Why button
     (pg:<place>:y). (fallback, "h") when it can't tell."""
     found = {}
-    for c in _walk((R.ix.get("message") or {}).get("components") or []):
+    for c in _all((R.ix.get("message") or {}).get("components")):
         parts = str(c.get("custom_id") or "").split(":")
         if len(parts) == 5 and parts[:3] == [PREFIX, VERSION, "pg"] \
                 and parts[4] in PAGES:
@@ -1998,16 +1930,6 @@ def shown(R, fallback):
     if "y" in found:
         return found["y"], "h"
     return fallback, "h"
-
-
-def _walk(comps):
-    for c in comps:
-        if not isinstance(c, dict):
-            continue
-        yield c
-        yield from _walk(c.get("components") or [])
-        if isinstance(c.get("accessory"), dict):
-            yield c["accessory"]
 
 
 # ---------------------------------------------------------------------------
@@ -2042,26 +1964,23 @@ def do_changes(R, origin, changes, confirmed=False, named=(), notes=(),
     if changes and not confirmed and R.owner:
         changes = [c for c in changes if not ui_noop(R, c)]
         if not changes:
-            R.banner = [td("**No change:** it's already like that.")]
-            return show(R, place, page)
+            return show(R, place, page,
+                        [td("**No change:** it's already like that.")])
     if not changes:
-        R.banner = [td("**No change.**")]
-        return show(R, place, page)
+        return show(R, place, page, [td("**No change.**")])
     if R.st.overlay_error:
-        R.banner = banner_error(OVERLAY_BROKEN.lstrip("⚠ "))
-        return show(R, place, page)
+        return show(R, place, page,
+                    banner_error(OVERLAY_BROKEN.lstrip("⚠ ")))
     if R.owner:
         try:
             a = ms.assess(R.st, changes, R.ctx, R.look, named=named)
         except ms.SettingsError as e:
-            R.banner = banner_error(plain_error(e))
-            return show(R, place, page)
+            return show(R, place, page, banner_error(plain_error(e)))
         if a.risky and not confirmed:
             try:
                 planned = ms.plan_changes(R.st, changes)
             except ms.SettingsError as e:
-                R.banner = banner_error(plain_error(e))
-                return show(R, place, page)
+                return show(R, place, page, banner_error(plain_error(e)))
             tok = R.ctx.stash_put(R.uid, {
                 "kind": "apply",
                 "changes": [dict(c.to_dict(), revert=c.revert)
@@ -2085,12 +2004,11 @@ def do_changes(R, origin, changes, confirmed=False, named=(), notes=(),
     except ms.SettingsError as e:
         if R.admin:
             return notice(ADMIN_ONLY_QUIETER)
-        R.banner = banner_error(plain_error(e))
-        return show(R, place, page)
+        return show(R, place, page, banner_error(plain_error(e)))
     R.reload()
     if not res.changed:
-        R.banner = [td("**No change:** it's already like that.")]
-        return show(R, place, page)
+        return show(R, place, page,
+                    [td("**No change:** it's already like that.")])
     if R.admin:
         for p in res.written:
             try:
@@ -2109,8 +2027,7 @@ def do_changes(R, origin, changes, confirmed=False, named=(), notes=(),
         text += "\n" + "\n".join(notes)
     up = ms.Place.server(R.admin_gid) if R.admin \
         else written_place(res, place)
-    R.banner = banner_done(R, text, up, res.group)
-    return show(R, place, page)
+    return show(R, place, page, banner_done(R, text, up, res.group))
 
 
 def ui_noop(R, change):
@@ -2143,8 +2060,7 @@ def ui_noop(R, change):
 def do_undo(R, place, expect=None, origin=None, confirmed=False):
     origin = origin or (place, "h")
     if R.st.overlay_error:
-        R.banner = banner_error(OVERLAY_BROKEN.lstrip("⚠ "))
-        return show(R, *origin)
+        return show(R, *origin, banner_error(OVERLAY_BROKEN.lstrip("⚠ ")))
     if R.admin:
         if place.kind not in ("server", "channel") \
                 or place.guild_id != R.admin_gid:
@@ -2158,11 +2074,9 @@ def do_undo(R, place, expect=None, origin=None, confirmed=False):
                                     names=R.look, admin_gid=admin_gid)
         plan = ms.undo_plan(R.st, up, children, admin_gid)
     except ms.SettingsError as e:
-        R.banner = banner_error(plain_error(e))
-        return show(R, *origin)
+        return show(R, *origin, banner_error(plain_error(e)))
     if not gid:
-        R.banner = [td("Nothing to undo here.")]
-        return show(R, *origin)
+        return show(R, *origin, [td("Nothing to undo here.")])
     if not expect or expect != gid:
         text = clip(f"Something changed since. Undo now would make: "
                     f"{say_undo(R, plan)}", 900)
@@ -2193,17 +2107,15 @@ def do_undo(R, place, expect=None, origin=None, confirmed=False):
     except ms.SettingsError as e:
         if R.admin:
             return notice(ADMIN_ONLY_QUIETER)
-        R.banner = banner_error(plain_error(e))
-        return show(R, *origin)
+        return show(R, *origin, banner_error(plain_error(e)))
     if not keys:
-        R.banner = [td("Nothing to undo here.")]
-        return show(R, *origin)
+        return show(R, *origin, [td("Nothing to undo here.")])
     if R.admin:
         before = R.st
         R.reload()
         for ch in plan:
             try:
-                sc = _scope_at(ch.place, ch.key, ch.path)
+                sc = ms._scope_for(ch.place, ch.key, ch.path)
                 R.ctx.notify_owners_admin_change(
                     R.admin_gid, R.uid,
                     ms.format_key(ms.change_path(before, ch), ch.key),
@@ -2211,8 +2123,7 @@ def do_undo(R, place, expect=None, origin=None, confirmed=False):
             except Exception as e:
                 R.ctx.log(f"settings_ui: admin notice: {e}")
     R.reload()
-    R.banner = [td(clip(f"↩ **Undone.** {text}", 900))]
-    return show(R, *origin)
+    return show(R, *origin, [td(clip(f"↩ **Undone.** {text}", 900))])
 
 
 # ---------------------------------------------------------------------------
@@ -2400,14 +2311,14 @@ def gone(R, place):
         if chans and place.channel_id not in chans \
                 and place.channel_id not in R.st.channels_listed(
                     place.guild_id):
-            R.banner = [td("That channel no longer exists.")]
-            return show(R, ms.Place.server(place.guild_id), "h")
+            return show(R, ms.Place.server(place.guild_id), "h",
+                        [td("That channel no longer exists.")])
     if place.kind in ("server", "channel"):
         gs = R.guilds()
         if gs and place.guild_id not in gs \
                 and place.guild_id not in R.st.servers_listed():
-            R.banner = [td("I'm not in that server any more.")]
-            return show(R, R.here(), "h")
+            return show(R, R.here(), "h",
+                        [td("I'm not in that server any more.")])
     return None
 
 
@@ -2496,8 +2407,7 @@ def v_set(R, place, args, values):
         return notice(OUT_OF_DATE)
     origin = shown(R, place)
     if isinstance(changes, str):
-        R.banner = [td(f"**No change:** {changes}")]
-        return show(R, *origin)
+        return show(R, *origin, [td(f"**No change:** {changes}")])
     return do_changes(R, origin, changes)
 
 
@@ -2532,8 +2442,7 @@ def v_pre(R, place, args, values):
     try:
         changes = ms.preset_changes(R.st, name, place, R.ctx, big="skip")
     except ms.SettingsError as e:
-        R.banner = banner_error(plain_error(e))
-        return show(R, *shown(R, place))
+        return show(R, *shown(R, place), banner_error(plain_error(e)))
     title = ms.PRESETS[name][0]
     notes = []
     members = R.members(place.guild_id)
@@ -2673,8 +2582,8 @@ def v_pz(R, place, args, values, resume=False):
     if resume:
         changes = ms.resume_changes(R.st, place)
         if not changes:
-            R.banner = [td("**No change:** it isn't paused there.")]
-            return show(R, *origin)
+            return show(R, *origin,
+                        [td("**No change:** it isn't paused there.")])
     else:
         changes = ms.pause_changes(place)
     return do_changes(R, origin, changes)
@@ -2723,6 +2632,6 @@ def v_wy(R, place, args, values):
     return show(R, place, "y")
 
 
-VERBS = {"pg": v_pg, "wh": v_wh, "set": v_set, "val": v_val, "pre": v_pre, "ppl": v_ppl, "rm": v_rm,
-         "mod": v_mod, "sub": v_sub, "ok": v_ok, "un": v_un, "pz": v_pz,
-         "rs": v_rs, "fx": v_fx, "wy": v_wy}
+VERBS = {"pg": v_pg, "wh": v_wh, "set": v_set, "val": v_val, "pre": v_pre,
+         "ppl": v_ppl, "rm": v_rm, "mod": v_mod, "sub": v_sub, "ok": v_ok,
+         "un": v_un, "pz": v_pz, "rs": v_rs, "fx": v_fx, "wy": v_wy}

@@ -554,6 +554,27 @@ class Admin(unittest.TestCase):
         self.assertIsNone(MS.undo(self.cfg, P.server(G2), ADMIN, PLUGINS,
                                   admin_gid=G2, info=INFO))
 
+    def test_admin_undo_never_reverts_an_owner_rewrite(self):
+        """An owner's pause written over an admin's same value: the
+        admin's Undo no longer reaches it."""
+        self.admin([C(S1, "who.replies", "off")])
+        apply(self.cfg, [C(S1, "who.replies", "off")], OWNER)
+        self.assertIsNone(MS.undo(self.cfg, S1, ADMIN, PLUGINS,
+                                  children=True, admin_gid=G1, info=INFO))
+        self.assertTrue(MS.is_paused(load(self.cfg), S1))
+
+    def test_fold_keeps_admin_entries_and_unquoted_ids(self):
+        self.admin([C(S1, "who.replies", "off")])
+        apply(self.cfg, [C(S1, "style.length", "brief")], OWNER)
+        MS.fold(self.cfg, PLUGINS)
+        # in config.yaml it would be the owners' own value
+        self.assertEqual(doc(self.cfg)["values"][KS]["role"], "admin")
+        self.cfg = config(self, BASE.replace(f'"{G1}"', G1)
+                          + f'    who:\n      ignore: ["{SPAM}"]\n')
+        apply(self.cfg, [C(S1, "who.ignore", "inherit")], OWNER)
+        MS.fold(self.cfg, PLUGINS)
+        self.assertEqual(value(self.cfg, S1, "who.ignore"), [])
+
 # ---------------------------------------------------------------------------
 # 7. who.dms_from lists
 # ---------------------------------------------------------------------------

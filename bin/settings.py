@@ -12,7 +12,8 @@
         or inherited from a wider scope). No flags = the everywhere
         scope. --explain lists every layer for each setting.
     bin/settings.py fold [--dry-run]
-        Copy the Discord-side changes into config.yaml and clear them.
+        Copy the Discord-side changes into config.yaml and clear them
+        (server admins' changes stay where they are).
         Rewrites config.yaml (its comments are lost) after saving a
         timestamped backup next to it. Does not prompt.
     bin/settings.py migrate [--dry-run] [--state PATH]
@@ -65,7 +66,8 @@ import sys
 import time
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, PKG)
+sys.path[:0] = [PKG, os.path.join(PKG, "bin")]
+import setup_common  # noqa: E402,F401  (re-runs under .venv if needed)
 import muse_settings as MS  # noqa: E402
 
 PLUGINS = os.path.join(PKG, "plugins")
@@ -217,10 +219,12 @@ def cmd_show(args):
 def cmd_fold(args):
     cfg = _cfg_path(args)
     st = MS.load(cfg, PLUGINS)
-    if not st.overlay:
-        print("Nothing to fold: no Discord changes in effect.")
+    keys = sorted(MS.format_key(p, k) for (p, k), e in st.overlay.items()
+                  if MS.entry_role(e) != "admin")
+    if not keys:
+        print("Nothing to fold: no Discord changes in effect (server "
+              "admins' changes stay in Discord).")
         return 0
-    keys = sorted(MS.format_key(p, k) for p, k in st.overlay)
     if args.dry_run:
         print("Would copy into config.yaml (and clear from "
               f"{MS.OVERLAY_NAME}):")

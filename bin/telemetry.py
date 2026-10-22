@@ -29,7 +29,8 @@ import sys
 from datetime import datetime, timezone
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, PKG)
+sys.path[:0] = [PKG, os.path.join(PKG, "bin")]
+import setup_common  # noqa: E402,F401  (re-runs under .venv if needed)
 import muse_settings as MS  # noqa: E402
 import telemetry as T  # noqa: E402
 
@@ -65,11 +66,8 @@ def cmd_show(args):
     pending = [p for p in d.get("pending") or [] if isinstance(p, dict)
                and p.get("day")]
     why = _why_off(st)
-    try:
-        install_id = T.read_install_id(ID_FILE)
-    except OSError:
-        install_id = T.read_install_id(ID_FILE, create=False) \
-            or "(made at the first send)"
+    install_id = T.read_install_id(ID_FILE, create=False) \
+        or "(made at the first send)"
     if why:
         print(f"Usage stats are {why}: nothing is sent.", file=sys.stderr)
     elif not T.endpoint():

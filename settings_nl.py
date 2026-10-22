@@ -140,19 +140,13 @@ def known_spec(key, plugins_dir=None):
     if not isinstance(key, str):
         return None
     key = MS.moved_key(key)  # an older worker's plugins.media.*
-    if key in MS.CORE:
-        return MS.CORE[key]
-    if key in MS.TOP:
-        return MS.TOP[key]
-    parts = key.split(".", 2)
-    if len(parts) == 3 and parts[0] == "plugins":
+    manifests = {}
+    if key.startswith("plugins."):
         try:
-            m = MS.load_manifests(plugins_dir).get(parts[1])
-        except MS.SettingsError:
+            manifests = MS.load_manifests(plugins_dir)
+        except (MS.SettingsError, OSError):
             return None
-        if m is not None:
-            return m.specs.get(parts[2])
-    return None
+    return MS.spec_of(key, manifests)
 
 
 def _list_key(key, spec):
@@ -248,7 +242,7 @@ def shape_problems(item, plugins_dir=None):
     if bad:
         out.append(f"a settings item carries no {', '.join(bad)}; only "
                    f"item, channel_id, channel_name, author, reply_to, "
-                   f"text, owner_dm_nonce and settings")
+                   f"text, reply_nonce, owner_dm_nonce and settings")
     text = item.get("text")
     if text is not None and (not isinstance(text, str)
                              or len(text) > TEXT_MAX):
@@ -338,8 +332,8 @@ def confirm_buttons(tok):
                    ("Cancel", 2, f"mdnl:no:{tok}"))
 
 
-def _clip(text, n=1990):
-    return text if len(text) <= n else text[:n - 1] + "…"
+def _clip(text):
+    return MS.clip(text, 1990)
 
 
 def _block(head, lines):
@@ -348,22 +342,10 @@ def _block(head, lines):
     return head + "\n" + "\n".join(f"- {x}" for x in lines)
 
 
-def _short_where(text):
-    return text[3:] if text.startswith("In ") else text
-
-
 def undo_lines(st, plan, names):
     """["#general in Work, When it answers → back to Chatty", ...]."""
-    sim = MS.simulate(st, plan)
-    out = []
-    for ch in plan:
-        sc = MS._scope_for(ch.place, ch.key, ch.path)
-        new = sim.top(ch.key) if sc is None else sim.get(ch.key, sc)
-        out.append(_short_where(
-            f"{MS._where(ch.place, ch.key, names, ch.path)}, "
-            f"{MS.label(ch.key)} → back to "
-            f"{MS.value_label(ch.key, new, names)}"))
-    return out
+    return [x[3:] if x.startswith("In ") else x
+            for x in MS.undo_lines(st, plan, names)]
 
 
 def locks_out(st, changes):
@@ -1003,48 +985,34 @@ def _decide(ctx, state, item, iid, meta, uid, cid, target, st, age, now):
         return Result(rec, [f"Settings (DM) from {who}: confirm asked (mdnl "
                             f"{tok}), {len(plan.lines)} change(s), "
                             f"{len(plan.warnings)} warning(s)"])
-    if plan.kind == "apply":
-        tok = new_token()
-        text = done_text(plan, "Done:", lead)
-        rec = _outcome("replied", "settings: applied", text,
-                       undo_button(tok), cid, target, "applied", now)
-        rec.update(phase="applying", group=group, undo_token=tok,
-                   nonce=(item.get("settings") or {}).get("nonce"))
-        state.setdefault("nl_outcomes", {})[iid] = rec
-        _add(ctx, state, "undo", tok, {"owner": uid, "group": group,
-                                       "at": now, "channel_id": cid})
-        ctx.save(state)
-        try:
-            ctx.apply(plan.changes, uid, role="owner", group=group)
-        except Exception as e:
-            if not group_written(ctx.reload(), group):
-                (state.get("nl_undo") or {}).pop(tok, None)
-                with ctx.live.lock:
-                    ctx.live.undo.pop(tok, None)
-                rec.update(_outcome("replied", "settings: refused "
-                                    "(invalid)", _clip(INVALID + _failed(e)
-                                                       + "."),
-                                    None, cid, target, "invalid", now))
-                ctx.save(state)
-                return Result(rec, [f"Settings (DM) from {who}: nothing "
-                                    f"changed ({_failed(e)})"])
-            # Else written after all (the error came after the write).
-        rec["phase"] = "ready"
-        ctx.save(state)
-        return Result(rec, [f"Settings (DM) from {who}: applied {group}: "
-                            + "; ".join(plan.lines)])
-    # An undo (by message): never undoable itself, so no button.
+    # Applied now. An undo (by message) is never undoable itself: no
+    # button.
+    apply = plan.kind == "apply"
+    tok = new_token() if apply else None
     rec = _outcome("replied", "settings: applied",
-                   done_text(plan, "Undone:", lead), None, cid, target,
+                   done_text(plan, "Done:" if apply else "Undone:", lead),
+                   undo_button(tok) if apply else None, cid, target,
                    "applied", now)
     rec.update(phase="applying", group=group,
                nonce=(item.get("settings") or {}).get("nonce"))
     state.setdefault("nl_outcomes", {})[iid] = rec
+    if apply:
+        rec["undo_token"] = tok
+        _add(ctx, state, "undo", tok, {"owner": uid, "group": group,
+                                       "at": now, "channel_id": cid})
     ctx.save(state)
     try:
-        _run_undo(ctx, plan, uid, group)
+        if apply:
+            ctx.apply(plan.changes, uid, role="owner", group=group)
+        else:
+            _run_undo(ctx, plan, uid, group)
     except Exception as e:
+        # Unless written after all (the error came after the write).
         if not group_written(ctx.reload(), group):
+            if tok:
+                (state.get("nl_undo") or {}).pop(tok, None)
+                with ctx.live.lock:
+                    ctx.live.undo.pop(tok, None)
             rec.update(_outcome("replied", "settings: refused (invalid)",
                                 _clip(INVALID + _failed(e) + "."), None,
                                 cid, target, "invalid", now))
@@ -1053,8 +1021,9 @@ def _decide(ctx, state, item, iid, meta, uid, cid, target, st, age, now):
                                 f"changed ({_failed(e)})"])
     rec["phase"] = "ready"
     ctx.save(state)
-    return Result(rec, [f"Settings (DM) from {who}: undid "
-                        f"{plan.group or plan.ident}: "
+    did = f"applied {group}" if apply \
+        else f"undid {plan.group or plan.ident}"
+    return Result(rec, [f"Settings (DM) from {who}: {did}: "
                         + "; ".join(plan.lines)])
 
 
@@ -1269,12 +1238,6 @@ def expire(ctx, state):
     return edits, logs
 
 
-def _line_id(h):
-    return json.dumps([h.get("key"), h.get("at"), h.get("by"),
-                       h.get("group"), h.get("to"), bool(h.get("undo"))],
-                      sort_keys=True, default=str)
-
-
 def _layer_effective(st, place, key, path, v):
     """What key resolves to at place when its layer (path) holds v (a
     history line's from / to; "inherit": the layer sets nothing)."""
@@ -1309,27 +1272,13 @@ def new_cli_groups(st, state, names=None):
     noticed at its start. The first time, only the position is saved
     (no flood of old changes). [{group, by, lines, undoable}], oldest
     first."""
-    hist = [h for h in (st.overlay_doc or {}).get("history") or []
-            if isinstance(h, dict)]
-    ids = [_line_id(h) for h in hist]
-    mark = state.get("nl_history_mark")
-    last = {"id": ids[-1] if ids else None,
-            "at": str(hist[-1].get("at") or "") if hist else None}
-    if not isinstance(mark, dict):
-        state["nl_history_mark"] = last
-        return []
-    if mark.get("id") in ids:
-        new = hist[len(ids) - ids[::-1].index(mark["id"]):]
-    else:
-        after = str(mark.get("at") or "")
-        new = [h for h in hist if str(h.get("at") or "") > after]
-    if last != mark:
-        state["nl_history_mark"] = last
+    new, state["nl_history_mark"] = MS.history_since(
+        st.overlay_doc, state.get("nl_history_mark"))
     groups, order = {}, []
-    for h in new:
+    for n, h in enumerate(new):
         if not _cli_line(h):
             continue
-        gid = h.get("group") or "line:" + _line_id(h)
+        gid = h.get("group") or ("line", n)   # never a group id
         if gid not in groups:
             groups[gid] = {"group": h.get("group"),
                            "by": str(h.get("by") or "?"), "lines": [],

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""muse-discord proactive (2026-10-21): the bot starts a conversation on
+"""muse-discord proactive: the bot starts a conversation on
 its own now and then, like a person would, instead of only replying.
 
 Off by default (proactive.enabled; the Friends preset turns it on for
@@ -91,6 +91,7 @@ SENT_KEEP_SECS = 8 * DAY
 SPENT_KEEP = 500
 PEOPLE_MAX = 3000
 FLUSH_SECS = 60
+REACT_CHECK_SECS = 6 * 3600         # reactions looked up at most this often
 SEND_RETRY_SECS = 90                # as the monitor's sends (nonce window)
 TEXT_KINDS = ("mention", "dm")      # queued messages that count as talking
 FORBIDDEN = ("reply_to", "reactions", "attachments", "settings",
@@ -404,23 +405,26 @@ class Proactive:
 
     def reacted(self, e):
         """Someone reacted to that unprompted message: an answer too.
-        Looked up once it matters (never during a REST backoff), and
+        Looked up once it matters, at most every REACT_CHECK_SECS (never
+        during a REST backoff: these calls block the main loop), and
         remembered."""
         if e.get("answered"):
             return True
-        if not e.get("msgs") or self.m.rest_backing_off():
+        now = self.clock()
+        if not e.get("msgs") or self.m.rest_backing_off() \
+                or now - e.get("checked", 0) < REACT_CHECK_SECS:
             return False
-        for mid in e["msgs"]:
-            try:
-                m = self.m.api_get(f"/channels/{e['channel_id']}/messages/"
-                                   f"{mid}")
-            except Exception:
-                continue
-            for r in (m or {}).get("reactions") or []:
-                if int(r.get("count") or 0) - (1 if r.get("me") else 0) > 0:
-                    e["answered"] = True
-                    self._dirty = True
-                    return True
+        e["checked"] = now
+        self._dirty = True
+        try:   # its last part: one call
+            m = self.m.api_get(f"/channels/{e['channel_id']}/messages/"
+                               f"{e['msgs'][-1]}")
+        except Exception:
+            return False
+        for r in (m or {}).get("reactions") or []:
+            if int(r.get("count") or 0) - (1 if r.get("me") else 0) > 0:
+                e["answered"] = True
+                return True
         return False
 
     def person_problem(self, state, uid, cid, now):
@@ -595,8 +599,11 @@ class Proactive:
         """One slot holds private targets (owner and DMs) or public ones
         (channels), never both, so nothing private shares a run with a
         public room: alternately, else whichever side has any."""
-        priv = [t for t in targets if t["type"] != "channel"]
-        pub = [t for t in targets if t["type"] == "channel"]
+        def shuffled(kind):   # past TARGETS_MAX, a different few each time
+            ts = [t for t in targets if t["type"] == kind]
+            return self.rng.sample(ts, len(ts))
+        priv = [t for t in targets if t["type"] == "owner"] + shuffled("dm")
+        pub = shuffled("channel")
         first, then = (pub, priv) if self.data().get("side") == "private" \
             else (priv, pub)
         return (first or then)[:TARGETS_MAX]
@@ -885,8 +892,7 @@ class Proactive:
         if len(s["posts"]) >= s.get("max_posts", MAX_PER_SLOT):
             s["spent"] = True
         entry = {"at": now, "slot": sid, "channel_id": cid,
-                 "user_id": t.get("user_id"), "type": t["type"],
-                 "pending": True}
+                 "user_id": t.get("user_id"), "type": t["type"]}
         d["sent"].append(entry)
         self.save()
         return self._send(state, s, cid, item, now)
@@ -925,11 +931,12 @@ class Proactive:
             if code == 403 or blocked \
                     or now - post["first"] >= SEND_RETRY_SECS:
                 post["status"] = "failed"
-                if maybe:
-                    # It counts, as a reply that may have landed does.
+                if maybe or code == 403:
+                    # It counts, as a reply that may have landed does; a
+                    # 403 (blocked, or no longer allowed there) too, so
+                    # nobody is tried again before they write.
                     for x in self.data()["sent"]:
                         if x.get("slot") == sid and x.get("channel_id") == cid:
-                            x.pop("pending", None)
                             x["msgs"] = list(getattr(e, "sent_ids", None)
                                              or [])[-4:]
                 else:
@@ -951,7 +958,6 @@ class Proactive:
         post.pop("parts", None)
         for x in self.data()["sent"]:
             if x.get("slot") == sid and x.get("channel_id") == cid:
-                x.pop("pending", None)
                 x["msgs"] = msgs[-4:]     # for reactions (an answer too)
         self.save()
         print(f"Slot {sid}: reached out in {cid} ({t['type']}, "

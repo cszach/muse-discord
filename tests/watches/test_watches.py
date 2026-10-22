@@ -609,7 +609,7 @@ class Cancel(Base):
             ".git", "tests", "e2e", "telemetry"))
         shutil.copy(self.mod.WATCHES_FILE, os.path.join(cli, "watches.json"))
         run = subprocess.run([sys.executable, os.path.join(
-            cli, "bin", "watches.py"), "cancel", rid], capture_output=True,
+            cli, "bin", "watches.py"), "cancel", rid, rid], capture_output=True,
             text=True, timeout=30)
         self.assertEqual(run.returncode, 0, run.stderr)
         with open(os.path.join(cli, "watches.json")) as f:

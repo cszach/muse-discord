@@ -70,7 +70,7 @@ fi
 
 # ---- the token drop-off ----
 INCOMING="$HOME/.config/muse-discord/incoming"
-mkdir -p "$INCOMING" && chmod 700 "$HOME/.config/muse-discord" "$INCOMING" \
+{ mkdir -p "$INCOMING" && chmod 700 "$HOME/.config/muse-discord" "$INCOMING"; } \
   || fail "could not make $INCOMING"
 echo "OK $INCOMING (only this account can read it)"
 
