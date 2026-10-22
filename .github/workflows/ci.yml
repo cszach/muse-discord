@@ -3,7 +3,29 @@ name: CI
 on:
   push:
     branches: [main]
+    paths:
+      # Docs-only changes skip the tests. These .md files are inputs to
+      # the code (rendered prompts, UPDATING.md's commands, the shipped
+      # persona's hash), so they still run them.
+      - "**"
+      - "!**.md"
+      - "!**.png"
+      - "!LICENSE"
+      - "worker-prompt.template.md"
+      - "watch-checker-prompt.template.md"
+      - "UPDATING.md"
+      - "persona.md"
   pull_request:
+    paths:
+      # Same list as push.
+      - "**"
+      - "!**.md"
+      - "!**.png"
+      - "!LICENSE"
+      - "worker-prompt.template.md"
+      - "watch-checker-prompt.template.md"
+      - "UPDATING.md"
+      - "persona.md"
 
 permissions:
   contents: read
