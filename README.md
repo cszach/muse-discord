@@ -1,45 +1,41 @@
-# Muse Discord Bot [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/sxjhCPdEG6)
+# Muse Discord Bot [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/sxjhCPdEG6) [![CI](https://github.com/cszach/muse-discord/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cszach/muse-discord/actions/workflows/ci.yml)
 
 ![Discord wordmark next to Muse's mascot Jolly holding Wumpus, Discord's mascot](banner.png)
 
-Put your Muse in your Discord server. It answers when someone mentions it,
-replies in a personality you shape, and sees the images and files people share.
+Put your Muse into Discord! Reply to DMs or messages in a server, read files, generate
+images/videos, set reminders, interact with other server members with your Muse in Discord!
+
+Why use `muse-discord` instead of building your own or using others? `muse-discord` is…
+
+- ⚔️ Battle-tested in a real Discord community with hundreds of members;
+- 🧪 Tested end-to-end;
+- 🔌 Extensible through the plugin system;
+- 😄 Easy to install.
 
 ## 🚀 Getting started
-
-**You need:** a Muse, a computer, and a Discord server you own or manage (no
-server yet? click **+** in Discord's server list). About 10 minutes.
-
-1. Send your Muse this message:
-
-   ```
-   Set up muse-discord for me by following SETUP.md in https://github.com/cszach/muse-discord
-   ```
-
-2. Make the bot's Discord app, named after your Muse. Your Muse tells you
-   exactly what to click.
-3. Press **Reset Token**, **Copy**, and paste it to your Muse in chat.
-4. Click the invite link your Muse gives you and pick your server.
-5. Mention the bot once in a channel. It answers within seconds. 🎉
-
-That's all: no IDs, settings files or terminals. The bot is your Muse itself;
-to shape how it talks, DM it in plain words.
-
-## 🔄 Updating
 
 Send your Muse this message:
 
 ```
-Update muse-discord by following UPDATING.md
+Set up muse-discord for me by following SETUP.md in https://github.com/cszach/muse-discord
 ```
 
-It updates to the latest release (a version tag such as `v1.2.0`) and asks
-before touching anything you customized. See [CHANGELOG.md](CHANGELOG.md) for
-what changed.
+and follow your Muse's instructions. That's it!
 
-When a new release ships, the bot DMs you what is new, with **Update now** and
-**Later** buttons. **Update now** has your Muse update to that release in its
-main chat. To turn the check off, set `updates.notify: off` in `config.yaml`.
+Your bot DMs you when a new version is out; tap **Update now**.
+
+## ✨ Features
+
+- 👤 **Interacts like a human**: It has a personality, waits for others to
+  finish their thought, and knows when to stop talking.
+- ⚙️ **Customizable**: Tell your Muse what you want to change in natural
+  language, or use `/settings` in your DM or a text channel.
+- 📄 **Attachments**: Images, videos, PDFs, text files.
+- 🎨 **Images and videos**: Your Muse can make them.
+- ⏰ **Reminders and watches**: "Ping me in 30 minutes", "tell me when
+  someone mentions free pizza".
+- 👋 **Reaches out on its own**: Checks in now and then, like a friend.
+- 🤫 **Keeps your secrets**: Never shares private things about you.
 
 ## 🤝 Join the community
 
@@ -48,10 +44,10 @@ main chat. To turn the check off, set `updates.notify: off` in `config.yaml`.
 Bring your bot to the unofficial Muse Discord server, where humans and their
 Muses hang out together.
 
-<!-- prettier-ignore -->
-> [!TIP]
-> 🎃 **The Halloween Muse Showdown is on now.** Share your Muse's Halloween
-> costume in the server for a shot at up to $120 in prizes.
+<p align="center">
+  🎃 <b>The Halloween Muse Showdown is on now.</b> Share your Muse's Halloween
+  costume in the server for a shot at up to $120 in prizes. ✨
+</p>
 
 <p align="center">
   <a href="https://discord.gg/sxjhCPdEG6">
@@ -59,167 +55,38 @@ Muses hang out together.
   </a>
 </p>
 
-## ✨ Features
+## ⚙️ Customizing
 
-- 💬 **Your Muse's personality.** The bot is your Muse itself, with its name
-  and its voice. To shape how it talks, DM it in plain words.
-- 👀 **Reads attachments.** Images, frames from videos, and the text inside PDFs
-  and text files reach your Muse along with the message.
-- ⏳ **Waits for the whole thought.** When someone mentions the bot and keeps
-  typing, the bot gives them a few seconds and answers the whole burst at once.
-- 🖼️ **Makes images and video** (optional). For you and anyone you allow, when
-  your Muse's runtime has generation tools.
-- 🤖 **Talks with other bots.** Other Muses can @mention it or reply to it and
-  get an answer. It mentions them properly so they see its replies, and it lets
-  a conversation end the way a person would, without looping.
-- ⚙️ **Settings from Discord.** Type `/settings` in any channel (or in a DM with
-  the bot) to see how it behaves there and change what owners change most:
-  when it replies, reply length, images and video, who can DM it, a daily
-  cap, or a whole style for the server (Friends, Community, Work), here, for
-  the whole server or everywhere. Pause, Undo, and **Why no reply?** to see
-  (and fix) why a message got no answer. Server admins get a panel to make it
-  quieter. For anything else, just DM it what you want ("only answer in
-  #general when I @ you"), or ask your Muse.
-- 👋 **Reaches out on its own** (optional, off by default). Like a friend
-  would, now and then: how did the exam go, something you'd like, a check-in
-  after a long gap; most of the time it says nothing. Only to you, to people
-  who DMed it first, and in quiet channels where you turn it on, with daily
-  caps, quiet hours at night, and never twice without an answer. The Friends
-  style turns it on for a server, or DM it "reach out sometimes". Anyone can
-  tell it "stop messaging me".
-- 📌 **Takes requests from you.** Ask it to react to a post, pin a message, post
-  in another channel, or start a thread. Only owners can ask, and moderation and
-  server settings stay out of its reach.
-- ⏰ **Reminders and watches.** "Ping me in 30 minutes", "tell me when someone
-  mentions pizza": anyone it answers can ask, and it comes back to them, and
-  only them, where they asked. "What are you watching for me?" lists them, "stop
-  watching for pizza" cancels one. Web watches ("tell me when the tickets go on
-  sale"), which your Muse checks on the web, are for owners only.
+Change anything everywhere, in one server, or in one channel:
 
-## 🛟 Reliability
-
-Most Discord bot starters have a dozen places where a mention can quietly die: a
-rate-limit storm, a restart mid-poll, a burst of rapid-fire messages, a worker
-crash. This one was hardened in production against each of them.
-
-- Every mention ends with a recorded outcome in `mention_ledger.json`: replied,
-  quarantined, or skipped with a reason.
-- Every few minutes the bot rereads recent channel history and your DMs with
-  it, and requeues any mention or DM that has no outcome.
-- When Discord rate-limits it, it backs off and keeps delivering the replies it
-  already has.
-- A reply is never posted twice, even when Discord times out after accepting it,
-  and only one copy of the bot can run at a time.
-- A watchdog restarts the bot if it stops or gets stuck, alerts you when
-  Discord rejects its token, and raises one alert per new failure.
+- **DM your bot** in plain words: "only answer in #general", "be brief in
+  the Work server". You can undo any change.
+- **Type `/settings`** in a server or DM. Pick a style (Friends, Community
+  or Work) or change one setting at a time.
+- **Ask your Muse** on muse.ai. See [SETTINGS.md](SETTINGS.md).
+- **Write a plugin** to add your own behavior. See
+  [plugins/README.md](plugins/README.md).
 
 ## 🔒 Security
 
-- **Triggers:** the bot answers @mentions, replies to its messages,
-  and DMs, from people and from other bots. It also answers the
-  person it just replied to if they keep talking within about two
-  minutes; set `replies: when-addressed` to turn that off. Its bare
-  name alone is not a trigger.
-- **New servers:** the bot joins careful and DMs you what it can see.
-  It never answers messages from before it joined.
-- **Channels:** the bot replies wherever Discord lets it send messages. To keep
-  it out of a channel, deny it View Channel there.
-- **DMs:** by default it reads only your DMs. You can open DMs to everyone or
-  turn them off.
-- **Quarantine:** messages that look like prompt injection or a data grab are
-  held for your review instead of going to your Muse.
-- **Settings:** only your own DMs can change settings, never server messages or
-  other people; anything that opens the bot up waits for your Apply.
-- **Reminders and watches:** always for the person who asked, back where they
-  asked, pinging only them; a watch only sees channels that person can read.
-  Web watches are checked in a separate session that can only read the web and
-  report, with each condition handed over as data.
-- **Reply caps:** optional daily caps, in total and per user, if you want to
-  bound token spend. Off by default; your own messages are always exempt.
-- **Replies stay with their run:** each message the bot answers comes with a
-  one-time code that only the reply session handling it gets, and every reply
-  must carry it and go back where the message was said. A session woken by a
-  stranger can't answer, silence or act on anyone else's message, and only
-  your own commands can use the bot's Discord tools, where your own words
-  point.
-- **Secret filter:** nothing the bot sends may contain its token (even lightly
-  disguised), any of its private codes, or anything shaped like a Discord
-  token. Such a reply is dropped, and you get a DM about it (at most once a
-  day); everything else goes out exactly as written.
-- **Token:** stored in one private file outside the repo by default. Your Muse
-  never gets it in a reply session's prompt.
-- **Limits:** on Muse, every session (your main chat, the reply sessions,
-  scheduled ones) runs as the same user on the same machine, without
-  per-session sandboxing. The reply session's tools (append a reply, the
-  Discord tool, read its own media) are limited by its instructions, not by
-  the system: one that followed an injection into its shell could read any
-  file, the token included. The checks above are what the bot itself
-  enforces on what it sends; see PROTOCOL.md's security note.
+| | You, in a DM | You, in a server | Server admin | Others, in a server | Others, in a DM |
+|---|:-:|:-:|:-:|:-:|:-:|
+| Chat with your Muse | ✅ | ✅ | ✅ | ✅ | ⚙️ |
+| Set reminders and watch Discord | ✅ | ✅ | ✅<sup>1</sup> | ✅<sup>1</sup> | ⚙️ |
+| Watch a website | ✅<sup>2</sup> | ❌ | ❌ | ❌ | ❌ |
+| Make images and videos | ✅ | ✅ | ⚙️ | ⚙️ | ⚙️ |
+| Change settings | ✅ | ✅ | 🔉<sup>3</sup> | ❌ | ❌ |
+| Post, pin or read in other channels | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Get the bot's token | ❌ | ❌ | ❌ | ❌ | ❌ |
 
-## 📊 Privacy and usage stats
+✅ yes · ⚙️ off unless you turn it on · 🔉 only to make it quieter · ❌ never
 
-Once a day the bot sends the muse-discord maintainer a small anonymous
-report, so we can see how many installs there are and what breaks. It
-is **on by default**, and easy to turn off. It goes only to the
-project's own Cloudflare Worker ([telemetry/worker](telemetry/worker),
-which keeps no IP addresses), at most once a day, after the day is over.
-Only released versions (a `vX.Y.Z` tag) send; a checkout of unreleased
-code never does.
+1. Up to 25 at a time, only in channels they can read.
+2. Not from a message with an attachment or a reply.
+3. In their own server only.
 
-What a report holds, for one UTC day:
-
-- a random install id (not tied to you or Discord; `python3
-  bin/telemetry.py reset-id` makes a new one), the day, the
-  muse-discord version, the Python version (like 3.12) and the OS
-  family (linux, darwin, ...);
-- how many commits the copy is past that release, and whether its code
-  (`.py`, `.sh` files) has local edits, so reports from `main` or a
-  customized copy aren't mistaken for the release itself (never commit
-  hashes or branch names; your persona and config don't count as edits);
-- how many servers the bot is in, and their total members rounded down
-  to a power of 2;
-- counts: messages seen (in servers and DMs), messages queued for your Muse,
-  replies sent, messages quarantined, unanswered messages by reason
-  (cap, not allowed, replies off, ...), wakes, images and videos
-  sent, restarts, settings changes by where they were made (/settings,
-  DM, command line) and presets applied (Friends, Community, Work);
-- how long replies took (median and 90th percentile, in whole seconds);
-- crashes, by exception class name only (like `ValueError`);
-- a few bot-wide settings as plain values (like DMs on or off,
-  follow-ups on or off, memory mode, media on or off).
-
-Never: message content, names, Discord ids of any kind, tokens, file
-paths, error messages, IP addresses, or any time finer than the day.
-`python3 bin/telemetry.py show` prints exactly what would be sent next,
-and `status` shows whether it is on and when it last sent.
-
-To turn it off, any one of these:
-
-- DM the bot "turn off usage stats";
-- `python3 bin/telemetry.py off`;
-- `telemetry: usage_stats: off` in `config.yaml`;
-- the environment variable `MUSE_DISCORD_TELEMETRY=off`.
-
-Days it was off are never sent, even if you turn it back on later.
-
-## 🔧 How it works
-
-Your Muse does the talking, a small monitor does the plumbing, and a watchdog
-keeps the monitor running.
-
-```
-Discord <-> monitor.py (deterministic, holds the token)
-              |  reply_queue.json   ^
-              v                     |  reply_outbox.json
-           your Muse (woken by a hook when work arrives)
-```
-
-The monitor has no LLM in it. It listens to Discord, queues the messages
-addressed to the bot, and sends the replies your Muse writes. Settings live in
-one commented file, `config.yaml`.
-
-Any agent that can read and write JSON files can stand in for the Muse.
-[PROTOCOL.md](PROTOCOL.md) documents the file protocol and the plugin hooks.
+In a server none of its owners is in, it answers nobody. Read more in
+[PROTOCOL.md](PROTOCOL.md).
 
 ## 📄 License
 
