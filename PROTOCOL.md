@@ -45,9 +45,8 @@ shares a context with anyone else's text. In this order:
    `owner_dm_nonce`; Unprompted messages); else the reminders and
    watches firing in owners' DMs (notices can carry text from
    elsewhere, such as a web page's summary).
-2. **An owner's server item with a power beyond answering itself** (an
-   owner command, or a `web_nonce`): alone, one per run, with its
-   `owner_command_nonce` and `web_nonce` (Owner commands; Web watches).
+2. **An owner's server command**: alone, one per run, with its
+   `owner_command_nonce` (Owner commands).
 3. Everyone else's items, batched.
 
 Every run gets each of its items' `reply_nonce` (a slot has none:
@@ -59,7 +58,7 @@ queue before the nonce files, which the monitor writes first.
 
 A runtime without the shipped hook must hand out the nonces the same
 way, from `item_nonces.json`, `owner_dm_nonces.json`,
-`owner_items.json`, `web_nonces.json` and `proactive_nonce.json` (each
+`owner_items.json` and `proactive_nonce.json` (each
 keyed by message id, mode 600); without them nothing can be answered.
 
 ## Files
@@ -135,7 +134,6 @@ anything appended meanwhile. Fields:
 | `standalone` | True: a plain message, not a Discord reply; notifies nobody |
 | `reply_nonce` | Required: the item's `reply_nonce` from the payload, as is (Replies stay with their run); not on a slot's answer |
 | `owner_dm_nonce` | Required on every item for an owner's DM (Owner DMs) and for a slot (Unprompted messages) |
-| `web_nonce` | Required when a `schedule` action adds a web watch outside an owner's DM (Web watches) |
 | `settings` | A settings request, owner DMs only (Settings requests) |
 | `schedule` | Reminders and watches to add or cancel (The schedule action) |
 | `proactive` | `"opt-out"` or `"opt-in"` ("Stop messaging me") |
@@ -358,7 +356,7 @@ and it is bound to the owner's own run and words:
   machine, with no per-session tool limit. A worker can read the token
   file (`token_from`, default `~/.config/muse-discord/bot_token`),
   every nonce file (`item_nonces.json`, `owner_dm_nonces.json`,
-  `owner_items.json`, `web_nonces.json`, `proactive_nonce.json`,
+  `owner_items.json`, `proactive_nonce.json`,
   `web_watches_due.json`), `state.json`, the queue, and the hook logs
   (`~/hooks/logs/*.jsonl` record wake payloads, nonces included).
 - **So** the nonces bind what a worker writes to the outbox and passes
@@ -782,8 +780,7 @@ Who and where come from the monitor's own records, never the outbox:
   the original message its `message_id`. A bot's request is refused.
 - `abilities.reminders` (owners, everyone or a list; default everyone)
   must allow the requester there. Owners always may. Web watches are
-  the owners' only, with no setting, and need the item's `web_nonce`
-  outside an owner's DM (Web watches).
+  set only from an owner's own DM, with no setting (Web watches).
 - A watch's `in` must be a server the bot is in, not ownerless, that
   the requester is a member of (`GET /guilds/<id>/members/<user>`; 404:
   not a member; any other failure refuses), and for a channel, one
@@ -801,7 +798,7 @@ applies it twice):
 | --- | --- |
 | Done | The worker's reply goes out as written |
 | Refused for a limit | Nothing changes; the monitor's own one-line explanation replaces the worker's text; ledgered `skipped`, code `watch-cap`, `detail` `{kind, cap, per}` (`per`: `person` or `total`) |
-| Not allowed (`abilities.reminders`, or a web watch from someone not an owner) | The same, code `watch-not-allowed` |
+| Not allowed (`abilities.reminders`, or a web watch not from an owner's DM) | The same, code `watch-not-allowed` |
 | Anything else that makes no sense (a time out of range, a place they can't read, an id not theirs, an unknown zone, a bot's request) | Nothing changes; the monitor's line goes out; ledgered `replied` |
 
 Limits (constants in `muse_watches.py`): none for the owners. Anyone
@@ -817,7 +814,7 @@ Every `mention` / `dm` queue item carries `watches`:
 | field | meaning |
 | --- | --- |
 | `can_set` | The author may set reminders and Discord watches here |
-| `can_web` | And web watches (the author is an owner) |
+| `can_web` | And web watches (an owner's own DM) |
 | `items` | The author's active ones that may be shown here: in a DM all of theirs, in a server those set there. Each: `id`, `kind`, `note`, `set_in`, then `due` (remind); `words`, `in`, `every`, `until` (watch); `what`, `every_secs`, `repeat`, `until`, `web: true` (web watch). In an owner's own DM, everyone's: others' with `for` / `for_id` and without their `note`, `words` or `what` (text others chose never reaches an owner-DM run). At most 25 |
 | `elsewhere` | How many of the author's are set elsewhere (not listed) |
 | `more` | How many past the 25 listed |
@@ -944,9 +941,12 @@ monitor --web_watches_due.json--> hooks/watch-due.sh --wake--> checker
 checker --bin/watch-report.py--> web_watch_results.json --> monitor
 ```
 
-- **Owners only**: each check is a turn of the owner's Muse reading the
-  web. A web watch someone else set before this rule ends at the next
-  web pass, as a `watch-met` fire with `result` `gave-up`.
+- **Owners' DMs only**: each check is a turn of the owner's Muse
+  reading the web. In a server, others' text reaches the same run and
+  could steer the condition, so an owner's server request is refused;
+  in an owner's DM the `owner_dm_nonce` binds the action to that run. A
+  web watch whose requester is not an owner now ends at the next web
+  pass, as a `watch-met` fire with `result` `gave-up`.
 - **Budget**: each watch at most every 30 minutes, and 500 checks a
   UTC day in all; checks past that wait for the next day.
 - **Due checks**: the first is due when the watch is set, then every
@@ -993,14 +993,6 @@ checker --bin/watch-report.py--> web_watch_results.json --> monitor
   ends with a `gave-up` fire. `refused`: it ends with a `refused` fire.
 - The Discord worker never creates a cron or anything else with a
   free-text prompt: it only asks for a web watch, bound to its item.
-- **Who asked, for real**: an owner's server message shares its
-  channel and history with everyone, so a fooled worker could put a
-  stranger's condition on the owner's item. So each owner's server item
-  gets a `web_nonce` (`state.json`, `web_nonces.json`), handed only to
-  that item's own run (Wakes), and an action adding a web watch must
-  echo it (in an owner's DM the `owner_dm_nonce` does this); without it
-  the item is set aside and stays open. The condition then only comes
-  from a run that read nobody else's text.
 
 ### watches.json
 
@@ -1354,8 +1346,9 @@ unloaded). A failing hook is caught and logged.
 `ctx` carries `state` (and `owners` for `gate_message`), `scope`,
 `settings` (the plugin's own resolved values there, nothing else),
 `cap_layers`, `counter_ids` and, for `gate_message`, `author_matches`.
-`api` has `log(...)`, `setting(key, scope)` and `param(key,
-guild_id=None, guild_name=None)`.
+`api` has `log(*args)` and `setting(key, scope)`. A plugin runs inside
+the monitor with its full access (the bot token included): install only
+plugins you trust.
 
 `plugin.yaml`'s `settings:` validate and scope like core settings:
 
