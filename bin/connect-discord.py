@@ -130,13 +130,6 @@ OWNER_STEPS = {
                          "**Save Changes** at the bottom. (With it set, "
                          "the bot's buttons and /settings go elsewhere.)"),
 }
-PUBLIC_NOTE = ("The bot is public, so anyone who has its install link can "
-               "add it to their server. It stays quiet in servers you are "
-               "not in, but to make it private: on the **Installation** "
-               "page set **Install Link** to **None** and click **Save "
-               "Changes**; then on the **Bot** page switch off **Public "
-               "Bot** and click **Save Changes**.")
-
 
 # ---------------------------------------------------------------------------
 # What was pasted
@@ -414,8 +407,7 @@ def connect(args, rep):
                         "is. Try again in a minute.", 3)
     bot_name = me.get("username") or "the bot"
     name = args.name or bot_name
-    rep.data.update(app_id=app_id, owner_id=owner_id, bot_name=bot_name,
-                    bot_public=bool(app.get("bot_public")))
+    rep.data.update(app_id=app_id, owner_id=owner_id, bot_name=bot_name)
     rep.line(f"OK: This is the bot {bot_name} (app {app_id}); its owner "
              f"is Discord user {owner_id}"
              + (f" (@{owner_name})." if owner_name else "."))
@@ -488,8 +480,6 @@ def connect(args, rep):
                  f"{st.token_sources()}, not {path}.")
     name_persona(st, name, rep)
 
-    if rep.data["bot_public"]:
-        rep.line(f"NOTE: {PUBLIC_NOTE}")
     url = C.invite_url(app_id)
     rep.data["invite_url"] = url
     rep.line(f"INVITE: {url}")

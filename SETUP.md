@@ -40,9 +40,7 @@ If your name contains "discord", Discord refuses it: use
 >    **<your name>**, tick the box, and click **Create**.
 > 3. In the left menu click **Installation**. Under **Install Link**
 >    choose **None**, then click **Save Changes**.
-> 4. Click **Bot** in the left menu. Switch off **Public Bot**, then
->    click **Save Changes**. (Now only you can add it to servers.)
-> 5. Still on **Bot**, click **Reset Token**, then **Yes, do it!**
+> 4. Click **Bot** in the left menu, then **Reset Token**, then **Yes, do it!**
 >    (Discord may ask for your password or 2FA code). Click **Copy** and
 >    paste it here. It's the bot's password; I'll lock it away.
 
@@ -94,10 +92,6 @@ Then send (with the `INVITE:` link):
 >
 > (No server yet? In Discord, click **+** at the bottom of the server
 > list, then **Create My Own**, then come back to the link.)
-
-If the output had a `NOTE: The bot is public` line, they skipped steps
-3-4 above; it is safe (it stays quiet in servers they are not in), so
-just add that note's two steps to this message.
 
 ## Step 4: Wait for the invite (you)
 
