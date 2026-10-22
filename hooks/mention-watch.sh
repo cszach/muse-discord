@@ -323,18 +323,19 @@ if [ "$nowner" -gt 0 ] && [ "$nowner" -lt "$ndue" ]; then
     due=$owner_dms
     ndue=$nowner
 fi
-# Then, one at a time, an owner's server command (owner_command_nonce:
-# bin/discord-api.py). Each wakes alone, so no other item's text
+# Then, one at a time, an owner's server item: it holds owner powers
+# (a command's owner_command_nonce for bin/discord-api.py; cancelling
+# anyone's reminders). Each wakes alone, so no other item's text
 # (another item's history included, even the same owner's) shares the
 # run that holds it. The rest wait for the next run, a few seconds
 # later.
 ncmd=0
 if [ "$nowner" -eq 0 ]; then
-    owner_cmds=$(printf '%s' "$due" | jq -c \
-        '[.[] | select(.owner_command == true)][:1]')
+    owner_cmds=$(printf '%s' "$due" | jq -c '[.[] | select(
+        .owner_command == true or (.settings.speaker? // "") == "owner")][:1]')
     ncmd=$(printf '%s' "$owner_cmds" | jq 'length')
     if [ "$ncmd" -gt 0 ] && [ "$ncmd" -lt "$ndue" ]; then
-        log "an owner's command wakes alone; the rest wait for the next run" \
+        log "an owner's item wakes alone; the rest wait for the next run" \
             '{"held":"'"$((ndue - ncmd))"'"}'
     fi
     if [ "$ncmd" -gt 0 ]; then

@@ -392,19 +392,21 @@ class ClaudeWorker(ClaudeBase):
         self.assertEqual(([i["message_id"] for i in items],
                           caps.get("cmd")), (["1005"], {}))
 
-    def test_owner_command_wakes_alone(self):
+    def test_owner_server_items_wake_alone(self):
         w = self.worker()
         own = dict(QUEUE[0], message_id="1005", owner_command=True)
-        write_json(self.pkg, "reply_queue.json", QUEUE + [own])
+        plain = dict(QUEUE[0], message_id="1006",
+                     settings={"speaker": "owner"})
+        write_json(self.pkg, "reply_queue.json", QUEUE + [own, plain])
         write_json(self.pkg, claude_worker.OWNER_ITEMS,
                    {"1005": {"nonce": NONCE}})
         seen = []
-        for _ in range(2):
+        for _ in range(3):
             items, caps = w.due()
             p = claude_worker.build_payload(items, None, caps)
             seen.append([(i["message_id"], i.get("owner_command_nonce"))
                          for i in p["items"]])
-        self.assertEqual(seen, [[("1005", NONCE)],
+        self.assertEqual(seen, [[("1005", NONCE)], [("1006", None)],
                                 [("1001", None), ("1002", None)]])
 
     def test_answers_each_item_once(self):

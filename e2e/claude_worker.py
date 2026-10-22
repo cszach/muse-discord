@@ -5,7 +5,8 @@ Plays the production reply worker against a test package dir. It does
 what hooks/mention-watch.sh does in a Muse install (poll the queue,
 hand each open item to exactly one worker run, re-hand it only after
 its lease runs out; owner DMs wake alone, with their owner_dm_nonce,
-and so do the owners' server commands, with their owner_command_nonce)
+and so do the owners' server items, a command with its
+owner_command_nonce)
 and what the worker session does (follow worker-prompt.template.md),
 with `claude -p` as the agent:
 
@@ -518,8 +519,8 @@ class Worker:
         or an owner command whose nonce the monitor has not written yet
         waits, unleased (the reply and command ones for at most
         NONCE_WAIT_SECS after it was queued). Owner DMs wake alone (real
-        DMs before notices); else one owner's server command wakes
-        alone; the rest wait for the next poll. Refreshes the leases (kept only
+        DMs before notices); else one owner's server item wakes alone;
+        the rest wait for the next poll. Refreshes the leases (kept only
         for items still queued, like the hook's state)."""
         now = time.time()
         items, nonces = open_items(self.pkg, self.answered)
@@ -566,9 +567,10 @@ class Worker:
                 due = owner
                 caps.update(dm=nonces, cmd=cmds)
             else:
-                # An owner's server command wakes alone (the hook's
-                # rule).
-                held = [i for i in due if is_owner_command(i)]
+                # An owner's server item (owner powers) wakes alone (the
+                # hook's rule).
+                held = [i for i in due if is_owner_command(i) or (
+                    i.get("settings") or {}).get("speaker") == "owner"]
                 if held:
                     due = held[:1]
                     caps.update(cmd=cmds)

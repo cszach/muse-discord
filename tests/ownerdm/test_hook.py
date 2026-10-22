@@ -99,10 +99,13 @@ class ForgedAnswersDoNotHideOwnerDms(_Hook):
                                         item("6", "dm", "member"),
                                         item("7", "mention", "owner")])
         self.write("reply_outbox.json", [{"item": "5", "text": "x"}])
-        p = self.wake()
-        self.assertEqual([i["message_id"] for i in p["items"]], ["6", "7"])
-        self.assertNotIn("owner_dm_nonce", json.dumps(p))
-        self.assertNotIn("c" * 32, json.dumps(p))
+        for want in (["7"], ["6"]):   # an owner's server item: alone
+            p = self.wake()
+            self.assertEqual([i["message_id"] for i in p["items"]], want)
+            self.assertNotIn("owner_dm_nonce", json.dumps(p))
+            self.assertNotIn("c" * 32, json.dumps(p))
+            self.write("reply_queue.json", [item("5", "mention", "member"),
+                                            item("6", "dm", "member")])
 
     def test_unreadable_nonce_file(self):
         with open(os.path.join(self.pkg, "owner_dm_nonces.json"), "w") as f:
