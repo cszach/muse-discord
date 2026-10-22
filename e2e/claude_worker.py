@@ -5,8 +5,7 @@ Plays the production reply worker against a test package dir. It does
 what hooks/mention-watch.sh does in a Muse install (poll the queue,
 hand each open item to exactly one worker run, re-hand it only after
 its lease runs out; owner DMs wake alone, with their owner_dm_nonce,
-and so do the owners' server messages, with their owner_command_nonce
-and web_nonce)
+and so do the owners' server commands, with their owner_command_nonce)
 and what the worker session does (follow worker-prompt.template.md),
 with `claude -p` as the agent:
 
@@ -134,7 +133,6 @@ OWNER_DM_NONCES = "owner_dm_nonces.json"
 # every open item's reply_nonce.
 OWNER_ITEMS = "owner_items.json"
 ITEM_NONCES = "item_nonces.json"
-WEB_NONCES = "web_nonces.json"
 # How long an item waits for a nonce the monitor has yet to write.
 NONCE_WAIT_SECS = 60
 
@@ -255,9 +253,9 @@ def persona_file(pkg, override=None):
 def build_payload(items, persona, caps=None):
     """The wake payload: {count, persona, items} with the hook's fields,
     plus the capabilities `caps` holds for each item ({"dm", "cmd",
-    "web", "reply"}: {message_id: nonce}; the caller passes only what
-    this wake may get): owner_dm_nonce, owner_command_nonce (owner
-    commands only), web_nonce and reply_nonce."""
+    "reply"}: {message_id: nonce}; the caller passes only what this wake
+    may get): owner_dm_nonce, owner_command_nonce (owner commands only)
+    and reply_nonce."""
     caps = caps or {}
     out = []
     for item in items:
@@ -267,8 +265,6 @@ def build_payload(items, persona, caps=None):
             p["owner_dm_nonce"] = caps["dm"][mid]
         if is_owner_command(item) and (caps.get("cmd") or {}).get(mid):
             p["owner_command_nonce"] = caps["cmd"][mid]
-        if (caps.get("web") or {}).get(mid):
-            p["web_nonce"] = caps["web"][mid]
         if (caps.get("reply") or {}).get(mid):
             p["reply_nonce"] = caps["reply"][mid]
         out.append(p)
@@ -522,9 +518,8 @@ class Worker:
         or an owner command whose nonce the monitor has not written yet
         waits, unleased (the reply and command ones for at most
         NONCE_WAIT_SECS after it was queued). Owner DMs wake alone (real
-        DMs before notices); else one owner's server item holding a
-        capability (a command, or a web watch nonce) wakes alone; the
-        rest wait for the next poll. Refreshes the leases (kept only
+        DMs before notices); else one owner's server command wakes
+        alone; the rest wait for the next poll. Refreshes the leases (kept only
         for items still queued, like the hook's state)."""
         now = time.time()
         items, nonces = open_items(self.pkg, self.answered)
@@ -537,7 +532,6 @@ class Worker:
         cmds = {k: (v.get("nonce") if isinstance(v, dict) else v)
                 for k, v in cmds.items()}
         reply_file, replies = load(ITEM_NONCES)
-        _, web = load(WEB_NONCES)
         queued = set()
         for item in read_json(os.path.join(self.pkg, "reply_queue.json"),
                               []) or []:
@@ -572,16 +566,12 @@ class Worker:
                 due = owner
                 caps.update(dm=nonces, cmd=cmds)
             else:
-                # An owner's server item holding a capability beyond
-                # answering itself (a command, or a web watch nonce: web
-                # watches are the owners' only) wakes alone (the hook's
+                # An owner's server command wakes alone (the hook's
                 # rule).
-                held = [i for i in due if is_owner_command(i) or (
-                    (i.get("settings") or {}).get("speaker") == "owner"
-                    and str(i["message_id"]) in web)]
+                held = [i for i in due if is_owner_command(i)]
                 if held:
                     due = held[:1]
-                    caps.update(cmd=cmds, web=web)
+                    caps.update(cmd=cmds)
             expired = [i for i in due if i["message_id"] in self.leases]
             for i in due:
                 self.leases[i["message_id"]] = now

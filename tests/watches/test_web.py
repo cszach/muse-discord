@@ -1,5 +1,5 @@
-"""Web watches: owners only, always (an old abilities.web_watches is
-ignored); a check result counts only with
+"""Web watches: an owner's own DM only, always (an old
+abilities.web_watches is ignored; an ex-owner's end); a check result counts only with
 that check's live one-time nonce, for an active watch (forged, reused,
 late or unknown ones change nothing); met, refused and gave-up fire
 once, to the requester only; the daily check budget; the checker hook
@@ -20,7 +20,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import test_watches as tw  # noqa: E402
 from common import HOOK_RUNTIME, MUT_DIR, scratch  # noqa: E402
-from settings_harness import CH, OWNER, U1, U2  # noqa: E402
+from settings_harness import OWNER, U1, U2  # noqa: E402
 
 W_ = None  # muse_watches, from the monitor under test
 
@@ -32,15 +32,23 @@ class Web(tw.Base):
         W_ = self.mod.W
 
     def web(self, uid=OWNER, what="tickets for the Blue Pelican on sale",
-            every=3600, repeat=False):
-        msg, _ = self.ask(uid)
-        n = (self.st.get("web_nonces") or {}).get(msg["id"])
-        extra = {"web_nonce": n["nonce"]} if n else {}   # its solo wake
+            every=3600, repeat=False, dm=True):
+        msg, _ = self.ask(uid, channel=tw.DM, dm=True) if dm \
+            else self.ask(uid)
         self.outbox(self.reply(msg, [{"op": "add", "kind": "watch",
                                       "check": "web", "what": what,
                                       "every": every, "repeat": repeat}],
-                               **extra))
+                               **self.dm_nonce(msg["id"])))
         return msg
+
+    def dm_nonce(self, mid):
+        n = (self.st.get("nl_nonces") or {}).get(mid)
+        return {"owner_dm_nonce": n["nonce"]} if n else {}
+
+    def answer(self, f, text):
+        self.outbox(self.held(dict({"item": f["message_id"],
+                                    "channel_id": tw.DM, "text": text},
+                                   **self.dm_nonce(f["message_id"]))))
 
     def due(self):
         try:
@@ -88,19 +96,40 @@ class Web(tw.Base):
                     ahead=3601 + W_.WEB_CHECK_SECS + 1)
         self.assertEqual(self.fires(), [])
 
+    def test_owner_in_a_server_is_refused(self):
+        # Others' text reaches that run: it could steer what the
+        # checker visits. Refused, and no web capability is handed out.
+        msg, q = self.ask(OWNER)
+        self.assertFalse(q["watches"]["can_web"])
+        self.assertNotIn("web_nonce", q)
+        self.outbox(self.reply(msg, [{"op": "add", "kind": "watch",
+                                      "check": "web", "what": "x",
+                                      "every": 3600}]))
+        self.assertEqual(self.items(), {})
+        self.assertEqual(self.ledger(msg["id"])["code"], "watch-not-allowed")
+
+    def test_ex_owner_web_watch_ends(self):
+        # Review L: web_issue must be given the owners now.
+        self.web()
+        (i,) = self.items()
+        with self.mod.watch_store().edit() as d:
+            d["items"][i]["requester"] = U1   # no longer an owner
+        self.tick()
+        self.assertNotIn(i, [e["id"] for e in self.due()])
+        self.assertNotIn(i, self.items())
+
     def test_met_fires_once_to_requester_only(self):
         msg = self.web()
         e = self.check()
         self.report({"id": e["id"], "nonce": e["nonce"], "result": "met"})
         (f,) = self.fires()
         self.assertEqual((f["kind"], f["author_id"], f["channel_id"]),
-                         ("watch-met", OWNER, CH))
+                         ("watch-met", OWNER, tw.DM))
         entry = f["reminder"]["items"][0]
         self.assertEqual((entry["result"], entry["summary"]),
                          ("met", "found it on the venue site"))
         self.assertEqual(self.items(), {})           # not "every time"
-        self.outbox(self.held({"item": f["message_id"], "channel_id": CH,
-                               "text": f"It's on sale! <@{U2}>"}))
+        self.answer(f, f"It's on sale! <@{U2}>")
         (path, data), = self.new_sends()
         self.assertEqual(data["message_reference"]["message_id"], msg["id"])
         self.assertEqual(data["allowed_mentions"]["users"], [OWNER])
@@ -118,8 +147,7 @@ class Web(tw.Base):
         self.tick(ahead=7200)
         self.assertEqual(len(self.fires()), 1)
         # Five unknowns in a row: it ends, and they are told once.
-        self.outbox(self.held({"item": f["message_id"], "channel_id": CH,
-                               "text": "I won't check that one."}))
+        self.answer(f, "I won't check that one.")
         self.web(what="the NFL game has started", every=1800)
         ahead = 0.0
         for _ in range(W_.WEB_MAX_FAILS):
@@ -138,10 +166,9 @@ class Web(tw.Base):
         self.cfg = tw.CFG + "    abilities:\n      web_watches: everyone\n"
         self.boot()
         self.assertIn("abilities.web_watches", self.mod.import_out)
-        msg = self.web(U1, every=1800)
+        msg = self.web(U1, every=1800, dm=False)
         self.assertEqual(self.items(), {})
         self.assertEqual(self.ledger(msg["id"])["code"], "watch-not-allowed")
-        self.assertNotIn(msg["id"], self.st.get("web_nonces") or {})
         self.web(OWNER, every=1800)
         self.assertEqual(len(self.items()), 1, self.out)
         # A web watch someone else set before this change ends (they are

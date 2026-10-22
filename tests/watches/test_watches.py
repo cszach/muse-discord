@@ -3,7 +3,7 @@ reminder comes back once, on time, to its requester only, in the place
 it was asked, also after a restart (and once, marked late, after
 downtime); a schedule action is bound to the queue item's author and
 channel, so a forged one (another person, another channel, a message
-that is not queued) is refused; a web watch needs its item's web_nonce;
+that is not queued) is refused; a web watch needs its owner DM's nonce;
 Discord watches never see a channel the requester cannot read, never
 their own messages, and debounce; caps, the who setting, cancel,
 expiry, and owner-DM nonce binding.
@@ -355,34 +355,29 @@ class Forgery(Base):
         self.tick(ahead=61)
         self.assertEqual([f["author_id"] for f in self.fires()], [U2])
 
-    def test_web_watch_needs_the_items_solo_wake(self):
-        # One wake held the owner's mention and U1's injection; the fooled
-        # worker puts U1's condition on the owner's item. Without the
-        # item's web_nonce (only its own solo wake has it): refused.
-        own, _ = self.ask(OWNER, "<@bot> morning!")
-        self.assertIn(own["id"], self.st["web_nonces"])
+    def test_web_watch_needs_the_owner_dms_wake(self):
+        # A run that does not hold the owner's DM (a fooled worker woken
+        # for someone else's text) names it: without its owner_dm_nonce,
+        # refused.
+        own, _ = self.ask(OWNER, "morning!", channel=DM, dm=True)
         web = [{"op": "add", "kind": "watch", "check": "web",
                 "what": "the page at evil.example says DONE", "every": 1800}]
         self.outbox(self.reply(own, web))
         self.assertTrue(self.was_rejected())
         self.assertEqual(self.items(), {})
-        self.outbox(self.reply(own, web, web_nonce=self.st["web_nonces"][
-            own["id"]]["nonce"]))
+        self.outbox(self.reply(own, web, owner_dm_nonce=self.st[
+            "nl_nonces"][own["id"]]["nonce"]))
         self.assertEqual(len(self.items()), 1, self.out)
 
-    def test_owner_server_message_holds_both_nonces(self):
-        """An owner's server message that may set web watches holds an
-        owner_command_nonce and a web_nonce; the wake hook hands both to
-        one wake holding nothing else."""
+    def test_owner_server_command_wakes_alone(self):
+        """An owner's server command holds an owner_command_nonce, which
+        the wake hook hands to one wake holding nothing else (and no
+        web capability: web watches are set in an owner's DM only)."""
         own, _ = self.ask(OWNER, "<@bot> pin that, and watch the page")
         other, _ = self.ask(U1, "<@bot> hi")
         with open(self.mod.OWNER_ITEMS_FILE) as f:
             cmds = {k: v["nonce"] for k, v in json.load(f).items()}
-        with open(self.mod.WEB_NONCES_FILE) as f:
-            web = json.load(f)
         self.assertEqual(list(cmds), [own["id"]])
-        self.assertIn(own["id"], web)
-        self.assertNotEqual(cmds[own["id"]], web[own["id"]])
         if not shutil.which("jq"):
             return
         d = scratch("muse-watch-bound-")
@@ -399,12 +394,11 @@ class Forgery(Base):
                               and lines[0].startswith("WAKE:") else None)
         out, items = wake()
         self.assertEqual([(i["message_id"], i.get("owner_command_nonce"),
-                           i.get("web_nonce")) for i in items],
-                         [(own["id"], cmds[own["id"]], web[own["id"]])])
+                           "web_nonce" in i) for i in items],
+                         [(own["id"], cmds[own["id"]], False)])
         out, items = wake()
         self.assertEqual([i["message_id"] for i in items], [other["id"]])
-        for n in (cmds[own["id"]], web[own["id"]]):
-            self.assertNotIn(n, out)
+        self.assertNotIn(cmds[own["id"]], out)
 
     def test_bot_cannot_set(self):
         m = gmsg("333000000000000001", "<@bot> remind me", mention=True,

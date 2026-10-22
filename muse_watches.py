@@ -124,8 +124,8 @@ LINES = {
     "channel": "I can only set reminders and watches where you asked, so "
                "nothing changed.",
     "unknown": "I couldn't set that, so nothing changed.",
-    "web-not-allowed": "Only my owners can set web watches, so nothing "
-                       "changed.",
+    "web-not-allowed": "Only my owners can set web watches, and only in a "
+                       "DM with me, so nothing changed.",
 }
 # Ledger reasons: monitor.ledger_code maps the prefixes to codes.
 REASON_CAP = "reminders: limit reached"          # -> watch-cap

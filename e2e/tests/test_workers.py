@@ -392,27 +392,20 @@ class ClaudeWorker(ClaudeBase):
         self.assertEqual(([i["message_id"] for i in items],
                           caps.get("cmd")), (["1005"], {}))
 
-    def test_capability_holders_wake_one_at_a_time(self):
+    def test_owner_command_wakes_alone(self):
         w = self.worker()
         own = dict(QUEUE[0], message_id="1005", owner_command=True)
-        web = dict(QUEUE[0], message_id="1006",
-                   settings={"speaker": "owner"})
-        write_json(self.pkg, "reply_queue.json", QUEUE + [own, web])
+        write_json(self.pkg, "reply_queue.json", QUEUE + [own])
         write_json(self.pkg, claude_worker.OWNER_ITEMS,
                    {"1005": {"nonce": NONCE}})
-        write_json(self.pkg, "web_nonces.json",
-                   {"1005": "cd" * 16, "1006": "ef" * 16,
-                    "1002": "01" * 16})
         seen = []
-        for _ in range(3):
+        for _ in range(2):
             items, caps = w.due()
             p = claude_worker.build_payload(items, None, caps)
-            seen.append([(i["message_id"], i.get("owner_command_nonce"),
-                          i.get("web_nonce")) for i in p["items"]])
-        # 1002 (no owner's) never gets a web nonce, even if listed.
-        self.assertEqual(seen, [[("1005", NONCE, "cd" * 16)],
-                                [("1006", None, "ef" * 16)],
-                                [("1001", None, None), ("1002", None, None)]])
+            seen.append([(i["message_id"], i.get("owner_command_nonce"))
+                         for i in p["items"]])
+        self.assertEqual(seen, [[("1005", NONCE)],
+                                [("1001", None), ("1002", None)]])
 
     def test_answers_each_item_once(self):
         self.use_fake("append")

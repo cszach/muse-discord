@@ -210,8 +210,7 @@ def guard_target(cid):
 
 # The monitor's private files of live nonces (none may ever be posted):
 # flat {id: nonce} maps, and files whose records hold a "nonce" field.
-FLAT_NONCE_FILES = ("item_nonces.json", "web_nonces.json",
-                    "proactive_nonce.json")
+FLAT_NONCE_FILES = ("item_nonces.json", "proactive_nonce.json")
 RECORD_NONCE_FILES = ("web_watches_due.json",)
 
 

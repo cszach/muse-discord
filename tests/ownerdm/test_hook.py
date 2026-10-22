@@ -149,9 +149,8 @@ def load_discord_api(work):
 
 @unittest.skipUnless(shutil.which("jq"), "jq not installed")
 class OwnerCommandsWakeAlone(_Hook):
-    """An item holding a capability beyond answering itself (an owner's
-    command: owner_command_nonce; a web watch: web_nonce) wakes alone,
-    one per wake, owners' first, and only that wake gets its nonces: a
+    """An owner's server command (owner_command_nonce) wakes alone, one
+    per wake, owner DMs first, and only that wake gets its nonce: a
     stranger's run cannot borrow the owner's open item, even though its
     history names the owner's message id. Every item's reply_nonce
     reaches only the wake holding it, and only an outbox entry carrying
@@ -196,27 +195,6 @@ class OwnerCommandsWakeAlone(_Hook):
         self.assertEqual([i["message_id"] for i in p["items"]], ["5"])
         self.assertNotIn(self.C, out)
         self.assertNotIn(N1, out)
-
-    def test_capability_holders_wake_one_at_a_time(self):
-        """An owner command that may set web watches gets both nonces
-        in its one wake; the owner's other web watch holder goes alone
-        next; then the rest together, with no web nonce (web watches are
-        the owners' only: a member's item never gets one, even if the
-        file lists it)."""
-        W1, W2, W3 = "c" * 32, "d" * 32, "f" * 32
-        web_owner = dict(item("8", "mention", "owner"), queued_at=1)
-        member = dict(item("9", "mention", "member"), queued_at=1)
-        self.write("web_nonces.json", {self.OWN: W1, "8": W2, "9": W3})
-        self.write("reply_queue.json", self.queue + [member, web_owner])
-        seen = []
-        for _ in range(3):
-            out, p = self.run_hook()
-            seen.append([(i["message_id"], i.get("owner_command_nonce"),
-                          i.get("web_nonce")) for i in p["items"]])
-            self.assertNotIn(W3, out)
-        self.assertEqual(seen, [[(self.OWN, self.C, W1)],
-                                [("8", None, W2)],
-                                [("5", None, None), ("9", None, None)]])
 
     def test_owner_dm_command_gets_its_dm_nonce(self):
         self.write("reply_queue.json", [dict(item("1"), owner_command=True)])

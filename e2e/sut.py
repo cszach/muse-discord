@@ -87,7 +87,7 @@ COPY_IGNORE = shutil.ignore_patterns(
     "proactive.json", "proactive.json.bad-*", "proactive_nonce.json",
     "nl_journal.json", "telemetry.json", "telemetry_id", "telemetry.wakes",
     "watches.json", "watches.json.bad-*", "watches.lock",
-    "web_watches_due.json", "web_watch_results.json", "web_nonces.json",
+    "web_watches_due.json", "web_watch_results.json",
     "*.log", "*.log.1", "media", "generated", "out", ".venv", ".seen-*",
     "worker-prompt.md", "watchdog-hook.out.*")
 READY_IDENTITY = "Bot user id: "
