@@ -1980,6 +1980,8 @@ def check_owner_presence(state, guilds, joined=(), every=False):
         due = sorted((e["next"], gid) for gid, e in seen.items()
                      if not e["in"] and e["next"] <= now and gid in guilds)
         for _next, gid in due[:None if every else OWNER_CHECKS_PER_PASS]:
+            if rest_backing_off():
+                break   # the rest stay gated, and are checked later
             e = seen[gid]
             res = owner_member(gid)
             if res is None:
@@ -2110,10 +2112,13 @@ def on_guild_event(state, ev):
             _MEMBER_COUNTS[gid] = ev["member_count"]
             publish_directory()
         known = state.get("known_guilds")
-        if known is not None and gid not in known:
-            _FORCE_DISCOVERY = True
-            # A join: ownerless until the owner check (sync_guilds).
+        if known is None or gid not in known:
+            # A join, or a first run whose discovery has not finished (a
+            # lost state.json): ownerless until the owner check
+            # (sync_guilds).
             note_guild_join_for_owners(state, gid)
+            if known is not None:
+                _FORCE_DISCOVERY = True
     else:
         name = state.get("known_guilds", {}).pop(gid, None)
         state.get("owner_in_guild", {}).pop(gid, None)
@@ -2689,10 +2694,10 @@ class SettingsCtx:
                     _DIRECTORY["channels"].get(str(guild_id)) or []]
 
     def write(self, key, value, by):
-        """One owner's change (no admin rules: never for anyone else)."""
+        """One change by `by` (its role inferred: a non-owner is an
+        admin, held to the admin rules)."""
         with _OVERLAY_LOCK:
-            MS.set_value(_SETTINGS.config_path, key, value, by, PLUGINS_DIR,
-                         role="owner")
+            MS.set_value(_SETTINGS.config_path, key, value, by, PLUGINS_DIR)
         settings()
 
     def undo(self, scope_prefix, by, **kw):
@@ -4229,6 +4234,7 @@ def flush_pending(state, queue, force=False):
                 "window", COALESCE_SECS):
             trigger = entry["trigger"]
             who = _who(trigger).get("username")
+            n_queue = len(queue)
             try:
                 ok = enqueue_message(trigger, entry["channel_name"], state,
                                      queue, dm=entry["kind"] == "dm",
@@ -4238,7 +4244,10 @@ def flush_pending(state, queue, force=False):
             except Exception as e:
                 # One poison burst must not hold back every other one:
                 # it is retried (then ledgered) like a failed enqueue.
+                # Whatever it appended goes too, or the duplicate check
+                # below would take the burst for queued.
                 print(f"Enqueue error: {type(e).__name__}: {e}", flush=True)
+                del queue[n_queue:]
                 ok = False
             n_frag = len(entry["fragments"])
             why = " (author stopped typing)" if early and not force else ""
@@ -4557,9 +4566,11 @@ def send_reply_with_files(channel_id, text, files, reply_to=None,
     for path, _ in files:
         with open(path, "rb") as f:
             blobs.append(f.read())
-    # And what the files hold: a worker can write a secret into one.
-    guard_outgoing({"files": [b.decode("latin-1") for b in blobs]},
-                   channel_id)
+    # And what the files hold (a worker can write a secret into one),
+    # with the text and names: joined, a secret split across them shows.
+    guard_outgoing({"content": text,
+                    "data": [b.decode("latin-1") for b in blobs],
+                    "files": [fname for _, fname in files]}, channel_id)
     payload = {"content": text,
                "allowed_mentions": mentions or SEND_ALLOWED_MENTIONS}
     if reply_to:
