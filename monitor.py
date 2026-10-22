@@ -8184,10 +8184,11 @@ def sweep_mentions(state, queue, channels, dms=True):
 # Plugins. A plugin is a folder under plugins/ with a plugin.py exposing
 # register(api) -> {hook_name: callable}, plus a plugin.yaml whose
 # `settings:` manifest declares its settings (type, default, scopes; see
-# muse_settings.load_manifests; an old `params:` list still works). A
-# plugin is loaded once some scope turns it on (plugins.<id>.enabled),
-# and its hooks run only where it is on. No plugin ships today (see
-# plugins/README.md); the core calls these hooks:
+# muse_settings.load_manifests). A plugin runs inside the monitor, with
+# its full access (the bot token included). It is loaded once some
+# scope turns it on (plugins.<id>.enabled), and its hooks run only where
+# it is on. No plugin ships today (see plugins/README.md); the core
+# calls these hooks:
 #
 #   gate_message(ctx, msg, guild_id) -> dict | None
 #       During enqueue: returned dicts are merged into the queue item
@@ -8202,78 +8203,26 @@ def sweep_mentions(state, queue, channels, dms=True):
 # there, nothing else), "cap_layers" (key -> [(counter id, cap)]: the
 # caps set along the scope, each counting in its own scope),
 # "counter_ids" (the counters an event there adds to) and, for
-# gate_message, "author_matches" (people value -> bool). api.param(key,
-# guild_id, guild_name) still resolves one value for one server (old
-# param names too, see Manifest.spec_for).
+# gate_message, "author_matches" (people value -> bool). The api handed
+# to register() has log(*args) and setting(key, scope).
 # ---------------------------------------------------------------------------
 PLUGIN_HOOKS = {}
 _HOOK_OWNER = {}        # id(hook fn) -> plugin id
 _LOADED_PLUGINS = set()  # plugin folders already imported
 
 
-def param_for(params, key, guild_id=None, guild_name=None):
-    """Resolve one plugin param for one guild, following the old global
-    + per_guild override pattern (for a plugin the settings know nothing
-    about). Two shapes are supported:
-
-    1. The param itself is {"default": value, "per_guild": {gid-or-name:
-       value}}: a per_guild hit wins, else the default.
-    2. The whole params block has a "per_guild" map of param overrides:
-       params["per_guild"][gid-or-name][key] wins over params[key].
-
-    per_guild keys may be guild IDs or guild (server) names; IDs are
-    tried first. Returns None when the param is unset."""
-    if not isinstance(params, dict):
-        return None
-    pg = params.get("per_guild")
-    if isinstance(pg, dict):
-        for k in (guild_id, guild_name):
-            if k and isinstance(pg.get(k), dict) and key in pg[k]:
-                return pg[k][key]
-    val = params.get(key)
-    if isinstance(val, dict) and ("default" in val or "per_guild" in val):
-        inner = val.get("per_guild") or {}
-        for k in (guild_id, guild_name):
-            if k and k in inner:
-                return inner[k]
-        return val.get("default")
-    return val
-
-
 class PluginAPI:
     """The facade handed to a plugin's register() at load time."""
 
-    _pid = None
-
-    def __init__(self, name, params):
-        self.name = name
-        self.params = params or {}
+    def __init__(self, pid):
+        self._pid = pid
 
     def log(self, *args):
         print(*args, flush=True)
 
-    def param(self, key, guild_id=None, guild_name=None):
-        """One setting for one server (guild_id None = everywhere). Old
-        param names map to their settings (allowed_user_ids -> who, as
-        a list: [] = the owners; daily_cap -> per_day)."""
-        st = settings()
-        man = st.manifests.get(self._pid or self.name)
-        if man is None:
-            return param_for(self.params, key, guild_id, guild_name)
-        skey, spec = man.spec_for(key)
-        if spec is None:
-            return None
-        scope = MS.Scope.server(guild_id, guild_name) if guild_id \
-            else MS.Scope.everywhere()
-        value = st.get(f"plugins.{man.id}.{skey}", scope)
-        if skey != key and spec.type == "people":
-            return [] if value == "owners" else value
-        return value
-
     def setting(self, key, scope):
         """One of this plugin's settings at a scope (ctx["scope"])."""
-        return settings().get(f"plugins.{self._pid or self.name}.{key}",
-                              scope)
+        return settings().get(f"plugins.{self._pid}.{key}", scope)
 
 
 def load_plugins():
@@ -8296,11 +8245,7 @@ def load_plugins():
         pid = man.id if man else name
         if not st.plugin_enabled_anywhere(pid):
             continue
-        params = {k: MS.display(man.specs.get(k), v) for k, v in
-                  st.plugin_values(pid, MS.Scope.everywhere()).items()} \
-            if man else {}
-        api = PluginAPI(name, params)
-        api._pid = pid
+        api = PluginAPI(pid)
         try:
             spec = importlib.util.spec_from_file_location(
                 f"muse_discord_plugin_{name}", pfile)
