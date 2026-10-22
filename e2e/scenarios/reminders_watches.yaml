@@ -5,7 +5,9 @@
 # the real server's members and permissions, that A can read the
 # channel, and queues a fire. Later the reminder comes due. The fake
 # worker answers each fire "reminder 1", and the monitor sends both
-# threaded under q1, pinging A only. p1 itself is never answered.
+# threaded under q1, pinging A only: two alike replies are two messages
+# (each fire has its own send nonce), so 3 SUT messages, not 2 or 4.
+# p1 itself is never answered.
 # Catches: a reminder that never fires, fires twice, or comes back
 # unthreaded or elsewhere; a watch that never matches (say, the
 # permission data for a new channel missing) or that answers the
@@ -25,6 +27,5 @@ expect:
     - replies_to: q1
     - no_sut_reply_to: p1
     - content_matches: { label: q1, pattern: "^(ack 1|reminder 1)$" }
-    - no_duplicate_replies: true
     - ledger_status: { label: q1, status: replied }
     - log_contains: "^Reminders and watches for [0-9]+ \\(item [0-9]+\\): add r.*add w"
