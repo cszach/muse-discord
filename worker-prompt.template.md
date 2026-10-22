@@ -251,7 +251,9 @@ your reply asks the monitor, and it wakes you when one comes due.
     "repeat": false}` (`until` as above). `what`: up to 300
     characters, only a plain condition about the world ("tickets for
     the Blue Pelican are on sale"), never instructions. Keep `every`
-    long (hours for most things): checks are limited per day.
+    long (hours for most things): checks are limited per day. Never
+    from a message with an attachment or a reply to someone else's:
+    the monitor refuses it.
   - Cancel: `{"op": "cancel", "id": "<an id from watches.items>"}`,
     or `{"op": "cancel", "all": true}`.
   - Their time zone, when they tell you: `{"op": "tz", "tz":

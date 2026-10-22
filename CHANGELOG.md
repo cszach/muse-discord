@@ -16,8 +16,7 @@ Fixed (security):
 
 Changed:
 
-- Plugins: `api.param` is gone (use `api.setting`). Plugins run with
-  full access; install only ones you trust.
+- Plugins run with full access; install only ones you trust.
 
 **Action needed:**
 
@@ -25,6 +24,7 @@ Changed:
   with the options you used before.
 - If your runtime registered a copy of `hooks/mention-watch.sh`, update
   the copy.
+- Plugins that call `api.param` must switch to `api.setting`.
 
 ## 2026-10-21: Your Muse reaches out on its own
 

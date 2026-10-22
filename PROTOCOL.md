@@ -45,7 +45,8 @@ shares a context with anyone else's text. In this order:
    `owner_dm_nonce`; Unprompted messages); else the reminders and
    watches firing in owners' DMs (notices can carry text from
    elsewhere, such as a web page's summary).
-2. **An owner's server command**: alone, one per run, with its
+2. **An owner's server item** (owner powers: a command, cancelling
+   anyone's reminders): alone, one per run, a command with its
    `owner_command_nonce` (Owner commands).
 3. Everyone else's items, batched.
 
@@ -786,7 +787,8 @@ Who and where come from the monitor's own records, never the outbox:
   not a member; any other failure refuses), and for a channel, one
   they can read (Discord watches).
 - People cancel their own by id; owners anyone's. `cancel all` is
-  always the requester's own.
+  always the requester's own. Web watches are cancelled only from an
+  owner's DM: elsewhere, cancels leave them alone.
 - Deciding fails closed: any error refuses the action, logged, nothing
   changed.
 
@@ -944,9 +946,13 @@ checker --bin/watch-report.py--> web_watch_results.json --> monitor
 - **Owners' DMs only**: each check is a turn of the owner's Muse
   reading the web. In a server, others' text reaches the same run and
   could steer the condition, so an owner's server request is refused;
-  in an owner's DM the `owner_dm_nonce` binds the action to that run. A
-  web watch whose requester is not an owner now ends at the next web
-  pass, as a `watch-met` fire with `result` `gave-up`.
+  in an owner's DM the `owner_dm_nonce` binds the action to that run.
+  A DM with an attachment or a reply to someone else's message
+  (`has_inputs`) cannot add one: the monitor's line asks the owner to
+  ask again in a message of their own. A web watch whose requester is
+  not an owner (any more) ends within a tick, its check withdrawn and
+  any report on it refused, as a `watch-met` fire with `result`
+  `gave-up`.
 - **Budget**: each watch at most every 30 minutes, and 500 checks a
   UTC day in all; checks past that wait for the next day.
 - **Due checks**: the first is due when the watch is set, then every
