@@ -70,6 +70,31 @@ class OutboxAppend(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertEqual(len(self.outbox()), 4)
 
+    def test_a_mis_copied_nonce_is_refused_at_once(self):
+        # A worker once wrote 23 of a reply_nonce's 32 characters; the
+        # monitor refused the reply and the message waited 10 minutes.
+        live = "5b5d" + "c" * 28
+        with open(os.path.join(self.pkg, "item_nonces.json"), "w") as f:
+            json.dump({"7": live}, f)
+        reply = {"item": "7", "channel_id": "2", "reply_to": "7",
+                 "text": "hi"}
+        code, err = self.append([dict(reply, reply_nonce=live[:23])])
+        self.assertEqual((code, self.outbox()), (1, []), err)
+        self.assertIn("reply_nonce", err)
+        code, err = self.append([dict(reply, reply_nonce=live)])
+        self.assertEqual(code, 0, err)
+        # Left to the monitor: a missing nonce (an out-of-date prompt,
+        # which the monitor tells the owners about) and an owner-DM
+        # nonce carried only as settings.nonce.
+        with open(os.path.join(self.pkg, "owner_dm_nonces.json"), "w") as f:
+            json.dump({"7": N}, f)
+        only_settings = settings_item([CHANGE], item="7", reply_to="7",
+                                      reply_nonce=live)
+        del only_settings["owner_dm_nonce"]
+        code, err = self.append([reply, only_settings])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.outbox()), 3)
+
     def test_bad_items_append_nothing(self):
         good = {"item": "1", "channel_id": "2", "reply_to": "1",
                 "text": "fine"}
