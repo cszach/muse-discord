@@ -1008,8 +1008,7 @@ def _live_nonces():
     maps, and the "nonce" fields of owner_items and the web checks
     (never other fields, such as a check's public group tag)."""
     out = set()
-    for cache in (_NL_NONCES_WRITTEN, _ITEM_NONCES_WRITTEN,
-                  _WEB_NONCES_WRITTEN):
+    for cache in (_NL_NONCES_WRITTEN, _ITEM_NONCES_WRITTEN):
         body = cache.get("body")
         if isinstance(body, dict):
             out |= {v for v in body.values() if isinstance(v, str) and v}
@@ -1233,6 +1232,7 @@ def load_state():
     for key in ("breaker", "owner_triggers", "trigger_texts"):
         state.pop(key, None)
     state.pop("bot_runs", None)  # leftover from the removed bot turn cap
+    state.pop("web_nonces", None)  # leftover: web watches are DM only now
     # Bursts staged by the removed name trigger: not direct address.
     state["pending"] = {k: v for k, v in state.get("pending", {}).items()
                         if v.get("kind") != "name_drop"}
@@ -3341,9 +3341,8 @@ def redact_nonces(item):
     out = dict(item)
     if OWNER_DM_NONCE_FIELD in out:
         out[OWNER_DM_NONCE_FIELD] = "(redacted)"
-    for field in ("web_nonce", REPLY_NONCE_FIELD):
-        if field in out:
-            out[field] = "(redacted)"
+    if REPLY_NONCE_FIELD in out:
+        out[REPLY_NONCE_FIELD] = "(redacted)"
     if isinstance(out.get("settings"), dict) \
             and "nonce" in out["settings"]:
         out["settings"] = dict(out["settings"], nonce="(redacted)")
@@ -5857,11 +5856,6 @@ def enqueue_message(msg, cname, state, queue, dm=False, fragments=None,
     # set one here (abilities.reminders).
     item["watches"] = watch_card(author_id, guild_id, dm, from_bot, here,
                                  author_matches)
-    if item["watches"].get("can_web") \
-            and not (dm and str(author_id) in OWNER_USER_IDS):
-        # Who may set web watches is woken alone with this capability,
-        # so nobody else's text shares that run (watch_web_nonce).
-        watch_mint_web_nonce(state, msg["id"])
     queue.append(item)
     burst_note = f" (+{len(fragments)} fragment(s))" if fragments else ""
     # An owner's own DM: every outbox item that answers it, settles it
@@ -6666,13 +6660,12 @@ def process_outbox(state):
             done_frags.add(item["reply_to"])
 
     # Answered: every capability those items held is spent.
-    for key in ("nl_nonces", "owner_items", "reply_nonces", "web_nonces"):
+    for key in ("nl_nonces", "owner_items", "reply_nonces"):
         held = state.get(key) or {}
         for qid in done_ids & set(held):
             del held[qid]
     reply_nonces_write(state)
     nl_write_nonces(state)
-    watch_write_web_nonces(state)
 
     def answered(q):
         return q.get("message_id") in done_ids or any(
@@ -6894,76 +6887,11 @@ def watch_can_set(uid, from_bot, here, matches):
         return False
 
 
-def watch_can_web(uid, from_bot):
-    """Web watches are the owners' only (no setting: each check is a turn
-    of the owner's Muse reading the web); never a bot."""
-    return not from_bot and str(uid) in OWNER_USER_IDS
-
-
-# Web watch capability. Web watches are the owners' only, and a fooled
-# worker could put a stranger's condition on an owner's item (an owner's
-# message in a server shares a channel, and its history, with everyone).
-# Each owner's server item (an owner's DM: its owner_dm_nonce does this
-# already) gets a random web_nonce, kept in state and web_nonces.json
-# (mode 600, read by the wake hook only), which the hook hands only to a
-# wake that holds nothing but that item; a schedule action adding a web
-# watch must echo it. Spent when the item settles.
-WEB_NONCES_FILE = os.path.join(BASE_DIR, "web_nonces.json")
-_WEB_NONCES_WRITTEN = {"body": None, "path": None}
-
-
-def watch_mint_web_nonce(state, mid):
-    n = state.setdefault("web_nonces", {})
-    n[str(mid)] = {"nonce": secrets.token_hex(16), "at": time.time()}
-    watch_write_web_nonces(state)
-
-
-def watch_write_web_nonces(state):
-    n = state.get("web_nonces") or {}
-    now = time.time()
-    for k in [k for k, v in n.items() if not isinstance(v, dict)
-              or now - v.get("at", 0) > 86400]:
-        del n[k]
-    _keep_last(n, 300)
-    _publish(WEB_NONCES_FILE, {k: v["nonce"] for k, v in n.items()},
-             _WEB_NONCES_WRITTEN, create=False)
-
-
-def watch_web_nonce_problem(state, item, qid, meta):
-    """None when a web watch may be added from this outbox item: it
-    answers an owner's own DM (owner_dm_gate checked its nonce), or it
-    carries the item's live web_nonce. Else why not."""
-    if _meta_owner_dm(meta):
-        return None
-    want = ((state.get("web_nonces") or {}).get(qid) or {}).get("nonce")
-    got = item.get("web_nonce")
-    if not want or not isinstance(got, str) or not hmac.compare_digest(
-            want.encode(), got.encode("utf-8", "replace")):
-        return ("schedule: a web watch needs the item's web_nonce (only a "
-                "wake that holds just that item has it)")
-    return None
-
-
-def watch_web_nonce_upkeep(state):
-    """A queued item that may set web watches always holds a live web
-    nonce (minted again when state.json was lost)."""
-    try:
-        queue = load_queue()
-    except (OSError, ValueError):
-        return
-    n = state.setdefault("web_nonces", {})
-    for q in queue:
-        if not isinstance(q, dict) or q.get("kind") not in ("mention", "dm") \
-                or not (q.get("watches") or {}).get("can_web") \
-                or str(q.get("author_id")) not in OWNER_USER_IDS \
-                or _queued_owner_dm(state, q):
-            continue
-        mid = str(q.get("message_id"))
-        if isinstance(n.get(mid), dict):
-            n[mid]["at"] = time.time()
-        else:
-            n[mid] = {"nonce": secrets.token_hex(16), "at": time.time()}
-    watch_write_web_nonces(state)
+def watch_can_web(uid, from_bot, dm):
+    """Web watches: an owner's own DM only (no setting: each check is a
+    turn of the owner's Muse reading the web). In a server, others' text
+    reaches the same run and could steer what the checker visits."""
+    return not from_bot and bool(dm) and str(uid) in OWNER_USER_IDS
 
 
 def watch_card(uid, guild_id, dm, from_bot, here, matches):
@@ -6973,7 +6901,7 @@ def watch_card(uid, guild_id, dm, from_bot, here, matches):
         return W.card(watch_store().read(), uid, guild_id, dm,
                       owner_dm=owner and dm and not from_bot,
                       can_set=watch_can_set(uid, from_bot, here, matches),
-                      can_web=watch_can_web(uid, from_bot))
+                      can_web=watch_can_web(uid, from_bot, dm))
     except Exception as e:
         print(f"Reminders and watches: no list for an item ({e})",
               flush=True)
@@ -7096,13 +7024,17 @@ def _watch_schedule(state, item, index):
         def matches(who):
             return people_match(who, uid, lambda: member_roles(gid, uid))
         can = watch_can_set(uid, False, here, matches)
-        can_web = can and watch_can_web(uid, False)
-        if can_web and any(c.get("op") == "add" and c.get("check") == "web"
-                           for c in changes):
-            # (Without the right, decide refuses it in plain words.)
-            problem = watch_web_nonce_problem(state, item, qid, meta)
-            if problem:
-                return ("reject", problem)
+        # (owner_dm_gate checked the owner DM's nonce; without the
+        # right, decide refuses a web watch in plain words.)
+        can_web = can and watch_can_web(uid, False, dm) \
+            and _meta_owner_dm(meta)
+        if can_web and meta.get("has_inputs") and any(
+                c.get("op") == "add" and c.get("check") == "web"
+                for c in changes):
+            # Someone else's words (a document, a quoted message) could
+            # have put it there.
+            raise W.Refused(W.LINES["web-inputs"], W.REASON_NOT_ALLOWED,
+                            {"kind": "watch-web"})
         resolved = {}
         if can:
             for c in changes:
@@ -7289,7 +7221,8 @@ def watch_tick(state, now=None):
                 print(f"Watch {wid} ended (its time ran out).", flush=True)
             queued += _watch_make_fires(state, data, entries, now,
                                         verdicts, counts)
-    if os.path.exists(WEB_RESULTS_FILE) or W.web_work(data, now):
+    if os.path.exists(WEB_RESULTS_FILE) \
+            or W.web_work(data, now, _web_owners()):
         with store.edit() as data:
             queued += _web_tick(state, data, now, verdicts)
     watch_write_due(store.read(), now)
@@ -7298,7 +7231,6 @@ def watch_tick(state, now=None):
     if now >= _WATCH_TICK["upkeep"]:
         _WATCH_TICK["upkeep"] = now + WATCH_UPKEEP_SECS
         watch_fire_upkeep(state, now)
-        watch_web_nonce_upkeep(state)
 
 
 def _watch_place(r):
@@ -7521,6 +7453,10 @@ def _web_take_results():
     return reps if isinstance(reps, list) else []
 
 
+def _web_owners():
+    return {str(o) for o in OWNER_USER_IDS}
+
+
 def _web_tick(state, data, now, verdicts):
     """Web watches, under the store's lock: apply the checker's reports
     (only with a live check's nonce, for an active watch; anything else
@@ -7529,8 +7465,9 @@ def _web_tick(state, data, now, verdicts):
     up. A summary that looks like prompt injection (is_suspicious) is
     withheld from the worker."""
     out = []
+    owners = _web_owners()
     for rep in _web_take_results():
-        res, i, rec = W.web_apply(data, rep, now)
+        res, i, rec = W.web_apply(data, rep, now, owners)
         if res is None:
             print(f"Refused a web watch report for {i or '?'}: {rec}.",
                   flush=True)
@@ -7550,9 +7487,11 @@ def _web_tick(state, data, now, verdicts):
                       f"injection; withheld.", flush=True)
                 e["summary_withheld"] = True
             out.append((rec["requester"], rec["channel_id"], (rec, e)))
-    for i, rec in W.web_issue(data, now):
-        print(f"Web watch {i}: no answer {W.WEB_MAX_FAILS} times; ended.",
-              flush=True)
+    for i, rec in W.web_issue(data, now, owners=owners):
+        why = (f"no answer {W.WEB_MAX_FAILS} times"
+               if rec.get("fails", 0) >= W.WEB_MAX_FAILS
+               else "its requester is not an owner")
+        print(f"Web watch {i}: {why}; ended.", flush=True)
         out.append((rec["requester"], rec["channel_id"],
                     (rec, W.fire_entry(i, rec, now, {"result": "gave-up"}))))
     return _watch_make_fires(state, data, out, now, verdicts, {},
@@ -8271,10 +8210,11 @@ def sweep_mentions(state, queue, channels, dms=True):
 # Plugins. A plugin is a folder under plugins/ with a plugin.py exposing
 # register(api) -> {hook_name: callable}, plus a plugin.yaml whose
 # `settings:` manifest declares its settings (type, default, scopes; see
-# muse_settings.load_manifests; an old `params:` list still works). A
-# plugin is loaded once some scope turns it on (plugins.<id>.enabled),
-# and its hooks run only where it is on. No plugin ships today (see
-# plugins/README.md); the core calls these hooks:
+# muse_settings.load_manifests). A plugin runs inside the monitor, with
+# its full access (the bot token included). It is loaded once some
+# scope turns it on (plugins.<id>.enabled), and its hooks run only where
+# it is on. No plugin ships today (see plugins/README.md); the core
+# calls these hooks:
 #
 #   gate_message(ctx, msg, guild_id) -> dict | None
 #       During enqueue: returned dicts are merged into the queue item
@@ -8289,78 +8229,26 @@ def sweep_mentions(state, queue, channels, dms=True):
 # there, nothing else), "cap_layers" (key -> [(counter id, cap)]: the
 # caps set along the scope, each counting in its own scope),
 # "counter_ids" (the counters an event there adds to) and, for
-# gate_message, "author_matches" (people value -> bool). api.param(key,
-# guild_id, guild_name) still resolves one value for one server (old
-# param names too, see Manifest.spec_for).
+# gate_message, "author_matches" (people value -> bool). The api handed
+# to register() has log(*args) and setting(key, scope).
 # ---------------------------------------------------------------------------
 PLUGIN_HOOKS = {}
 _HOOK_OWNER = {}        # id(hook fn) -> plugin id
 _LOADED_PLUGINS = set()  # plugin folders already imported
 
 
-def param_for(params, key, guild_id=None, guild_name=None):
-    """Resolve one plugin param for one guild, following the old global
-    + per_guild override pattern (for a plugin the settings know nothing
-    about). Two shapes are supported:
-
-    1. The param itself is {"default": value, "per_guild": {gid-or-name:
-       value}}: a per_guild hit wins, else the default.
-    2. The whole params block has a "per_guild" map of param overrides:
-       params["per_guild"][gid-or-name][key] wins over params[key].
-
-    per_guild keys may be guild IDs or guild (server) names; IDs are
-    tried first. Returns None when the param is unset."""
-    if not isinstance(params, dict):
-        return None
-    pg = params.get("per_guild")
-    if isinstance(pg, dict):
-        for k in (guild_id, guild_name):
-            if k and isinstance(pg.get(k), dict) and key in pg[k]:
-                return pg[k][key]
-    val = params.get(key)
-    if isinstance(val, dict) and ("default" in val or "per_guild" in val):
-        inner = val.get("per_guild") or {}
-        for k in (guild_id, guild_name):
-            if k and k in inner:
-                return inner[k]
-        return val.get("default")
-    return val
-
-
 class PluginAPI:
     """The facade handed to a plugin's register() at load time."""
 
-    _pid = None
-
-    def __init__(self, name, params):
-        self.name = name
-        self.params = params or {}
+    def __init__(self, pid):
+        self._pid = pid
 
     def log(self, *args):
         print(*args, flush=True)
 
-    def param(self, key, guild_id=None, guild_name=None):
-        """One setting for one server (guild_id None = everywhere). Old
-        param names map to their settings (allowed_user_ids -> who, as
-        a list: [] = the owners; daily_cap -> per_day)."""
-        st = settings()
-        man = st.manifests.get(self._pid or self.name)
-        if man is None:
-            return param_for(self.params, key, guild_id, guild_name)
-        skey, spec = man.spec_for(key)
-        if spec is None:
-            return None
-        scope = MS.Scope.server(guild_id, guild_name) if guild_id \
-            else MS.Scope.everywhere()
-        value = st.get(f"plugins.{man.id}.{skey}", scope)
-        if skey != key and spec.type == "people":
-            return [] if value == "owners" else value
-        return value
-
     def setting(self, key, scope):
         """One of this plugin's settings at a scope (ctx["scope"])."""
-        return settings().get(f"plugins.{self._pid or self.name}.{key}",
-                              scope)
+        return settings().get(f"plugins.{self._pid}.{key}", scope)
 
 
 def load_plugins():
@@ -8383,11 +8271,7 @@ def load_plugins():
         pid = man.id if man else name
         if not st.plugin_enabled_anywhere(pid):
             continue
-        params = {k: MS.display(man.specs.get(k), v) for k, v in
-                  st.plugin_values(pid, MS.Scope.everywhere()).items()} \
-            if man else {}
-        api = PluginAPI(name, params)
-        api._pid = pid
+        api = PluginAPI(pid)
         try:
             spec = importlib.util.spec_from_file_location(
                 f"muse_discord_plugin_{name}", pfile)

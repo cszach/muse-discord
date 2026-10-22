@@ -229,15 +229,6 @@ if [ -f "$PKG_DIR/item_nonces.json" ]; then
         "$PKG_DIR/item_nonces.json" 2>/dev/null) || reply_nonces='{}'
     [ -n "$reply_nonces" ] || reply_nonces='{}'
 fi
-# The web watch capabilities ({message_id: web_nonce}, the monitor's
-# private file): an item whose author may set web watches is handed out
-# alone, with its web_nonce, so nobody else's text shares that run.
-web_nonces='{}'
-if [ -f "$PKG_DIR/web_nonces.json" ]; then
-    web_nonces=$(jq -c 'if type == "object" then . else {} end' \
-        "$PKG_DIR/web_nonces.json" 2>/dev/null) || web_nonces='{}'
-    [ -n "$web_nonces" ] || web_nonces='{}'
-fi
 
 # Open items: queued and not answered (a burst may be answered under any
 # of its fragments). An item counts as answered only by an entry that
@@ -332,22 +323,19 @@ if [ "$nowner" -gt 0 ] && [ "$nowner" -lt "$ndue" ]; then
     due=$owner_dms
     ndue=$nowner
 fi
-# Then, one at a time, an owner's server item that holds a capability
-# beyond answering itself: a command (owner_command_nonce:
-# bin/discord-api.py) or a web watch capability (web_nonce; web watches
-# are the owners' only). Each wakes alone, so no other item's text
+# Then, one at a time, an owner's server item: it holds owner powers
+# (a command's owner_command_nonce for bin/discord-api.py; cancelling
+# anyone's reminders). Each wakes alone, so no other item's text
 # (another item's history included, even the same owner's) shares the
 # run that holds it. The rest wait for the next run, a few seconds
 # later.
 ncmd=0
 if [ "$nowner" -eq 0 ]; then
-    owner_cmds=$(printf '%s' "$due" | jq -c --argjson wn "$web_nonces" \
-        '[.[] | select(.owner_command == true
-            or ((.settings.speaker? // "") == "owner"
-                and $wn[.message_id | tostring] != null))][:1]')
+    owner_cmds=$(printf '%s' "$due" | jq -c '[.[] | select(
+        .owner_command == true or (.settings.speaker? // "") == "owner")][:1]')
     ncmd=$(printf '%s' "$owner_cmds" | jq 'length')
     if [ "$ncmd" -gt 0 ] && [ "$ncmd" -lt "$ndue" ]; then
-        log "an owner's command wakes alone; the rest wait for the next run" \
+        log "an owner's item wakes alone; the rest wait for the next run" \
             '{"held":"'"$((ndue - ncmd))"'"}'
     fi
     if [ "$ncmd" -gt 0 ]; then
@@ -365,16 +353,10 @@ if [ "$nowner" -gt 0 ] && [ "$nowner" -eq "$ndue" ]; then
     nonces=$all_nonces
 fi
 # Each owner command's owner_command_nonce, only in a wake that holds
-# nothing but owner items (owner DMs, or that one item); a web_nonce only
-# in the wake of its own (owner's) item alone. (An owner DM's
-# owner_dm_nonce does the web nonce's job already.)
+# nothing but owner items (owner DMs, or that one item).
 cmds='{}'
-wnonces='{}'
 if [ "$nowner" -eq "$ndue" ] || [ "$ncmd" -eq "$ndue" ]; then
     cmds=$cmd_nonces
-fi
-if [ "$ncmd" -gt 0 ] && [ "$ncmd" -eq "$ndue" ]; then
-    wnonces=$web_nonces
 fi
 expired=$(printf '%s' "$due" | jq --argjson w "$woken" \
     '[.[] | select($w[.message_id] != null)] | length')
@@ -427,5 +409,5 @@ else
     persona_args=(--argjson persona null)
 fi
 
-payload=$(printf '%s' "$due" | jq -c "${persona_args[@]}" --argjson nonces "$nonces" --argjson cmds "$cmds" --argjson wn "$wnonces" --argjson rn "$reply_nonces" '{count: length, persona: $persona, items: [.[] | {message_id, channel_id, channel_name, kind, author, author_id, content, media, documents, unviewable, history, may_generate, owner_command, reply_to, burst, burst_fragments, from_bot, bot_turns, participants, follow_up, settings, watches, reminder, proactive} + (if $nonces[.message_id] then {owner_dm_nonce: $nonces[.message_id]} else {} end) + (if .owner_command == true and $cmds[.message_id] then {owner_command_nonce: $cmds[.message_id]} else {} end) + (if $wn[.message_id] then {web_nonce: $wn[.message_id]} else {} end) + (if $rn[.message_id] then {reply_nonce: $rn[.message_id]} else {} end)]}')
+payload=$(printf '%s' "$due" | jq -c "${persona_args[@]}" --argjson nonces "$nonces" --argjson cmds "$cmds" --argjson rn "$reply_nonces" '{count: length, persona: $persona, items: [.[] | {message_id, channel_id, channel_name, kind, author, author_id, content, media, documents, unviewable, history, may_generate, owner_command, reply_to, burst, burst_fragments, from_bot, bot_turns, participants, follow_up, settings, watches, reminder, proactive} + (if $nonces[.message_id] then {owner_dm_nonce: $nonces[.message_id]} else {} end) + (if .owner_command == true and $cmds[.message_id] then {owner_command_nonce: $cmds[.message_id]} else {} end) + (if $rn[.message_id] then {reply_nonce: $rn[.message_id]} else {} end)]}')
 wake "muse-discord mentions pending" "$payload"

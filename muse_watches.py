@@ -124,8 +124,11 @@ LINES = {
     "channel": "I can only set reminders and watches where you asked, so "
                "nothing changed.",
     "unknown": "I couldn't set that, so nothing changed.",
-    "web-not-allowed": "Only my owners can set web watches, so nothing "
-                       "changed.",
+    "web-not-allowed": "Only my owners can set web watches, and only in a "
+                       "DM with me, so nothing changed.",
+    "web-inputs": "I can't set a web watch from a message with an "
+                  "attachment or a reply to someone else's, so nothing "
+                  "changed. Ask me again in a message of your own.",
 }
 # Ledger reasons: monitor.ledger_code maps the prefixes to codes.
 REASON_CAP = "reminders: limit reached"          # -> watch-cap
@@ -506,12 +509,16 @@ def decide(data, req, changes, now=None):
             done.append(("tz", c["tz"]))
             continue
         if op == "cancel":
+            # Web watches change only where they are set (req.can_web).
+            def ok(r):
+                return req.can_web or r.get("kind") != "watch-web"
             if c.get("all"):
                 ids = [i for i, r in items.items()
-                       if r.get("requester") == req.requester and i in live]
+                       if r.get("requester") == req.requester and i in live
+                       and ok(r)]
             else:
                 r = items.get(c["id"])
-                if r is None or c["id"] not in live or not (
+                if r is None or c["id"] not in live or not ok(r) or not (
                         req.owner or r.get("requester") == req.requester):
                     raise Refused(LINES["cancel"])
                 ids = [c["id"]]
@@ -769,6 +776,13 @@ def _backoff(rec, now):
                                   * 2 ** max(0, rec.get("fails", 0)))
 
 
+def _not_owners(r, owners):
+    """A web watch set before they were the owners' only, or by someone
+    no longer among owners (the owners now, when given)."""
+    return not r.get("owner") or (owners is not None
+                                  and str(r.get("requester")) not in owners)
+
+
 def web_issue(data, now=None, owners=None):
     """Expire checks nobody reported on (a failure each: back off, and
     give up after WEB_MAX_FAILS), then issue the due ones, each with a
@@ -787,6 +801,11 @@ def web_issue(data, now=None, owners=None):
         if not isinstance(r, dict) or r.get("kind") != "watch-web" \
                 or r.get("until", 0) <= now:
             continue
+        if _not_owners(r, owners):
+            # It ends, its check withdrawn (the requester is told, as for
+            # one that gave up).
+            gave_up.append((i, data["items"].pop(i)))
+            continue
         chk = r.get("check")
         if chk and chk.get("expires", 0) <= now:
             r["check"] = None
@@ -795,13 +814,6 @@ def web_issue(data, now=None, owners=None):
                 gave_up.append((i, data["items"].pop(i)))
                 continue
             _backoff(r, now)
-            continue
-        if not r.get("owner") or (owners is not None
-                                  and str(r.get("requester")) not in owners):
-            # Set before web watches were the owners' only, or by someone
-            # no longer an owner: it ends (the requester is told, as for
-            # one that gave up).
-            gave_up.append((i, data["items"].pop(i)))
             continue
         if chk or r.get("next_check", 0) > now:
             continue
@@ -859,7 +871,7 @@ def report_problems(rep):
     return out
 
 
-def web_apply(data, rep, now=None):
+def web_apply(data, rep, now=None, owners=None):
     """Apply one check report: (result, id, record) for a report naming
     a live check of an active web watch with that check's nonce (spent
     now), else (None, id, why). met: the watch ends unless it repeats, then
@@ -875,6 +887,8 @@ def web_apply(data, rep, now=None):
     chk = (r or {}).get("check") if isinstance(r, dict) else None
     if not r or r.get("kind") != "watch-web" or r.get("until", 0) <= now:
         return None, i, "no such active web watch"
+    if _not_owners(r, owners):
+        return None, i, "its requester is not an owner"
     if not chk or chk.get("expires", 0) <= now:
         return None, i, "no live check (expired or already reported)"
     if not hmac.compare_digest(str(chk.get("nonce")).encode(),
@@ -903,13 +917,16 @@ def web_apply(data, rep, now=None):
     return "unknown", i, r
 
 
-def web_work(data, now=None):
+def web_work(data, now=None, owners=None):
     """True when web_issue has something to do (a check to issue or to
-    expire), so the monitor takes the lock only then."""
+    expire, or a watch to end), so the monitor takes the lock only
+    then."""
     now = time.time() if now is None else now
     for r in data["items"].values():
         if isinstance(r, dict) and r.get("kind") == "watch-web" \
                 and r.get("until", 0) > now:
+            if _not_owners(r, owners):
+                return True
             chk = r.get("check")
             if (chk and chk.get("expires", 0) <= now) or (
                     not chk and r.get("next_check", 0) <= now):

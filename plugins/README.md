@@ -25,6 +25,12 @@ def register(api):
     return {"gate_message": gate_message}
 ```
 
+`api` has `log(*args)` and `setting(key, scope)` (`scope` is
+`ctx["scope"]`).
+
+**Only install plugins you trust.** A plugin runs inside the monitor
+with its full access, the bot token included.
+
 The monitor loads a plugin once some scope turns it on
 (`plugins.<id>.enabled: on` in `config.yaml`, or by DMing the bot "turn
 on example"; in `/settings` only server admins can turn one off). The hooks, `ctx`

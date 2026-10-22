@@ -6,6 +6,26 @@ entries below the releases are pre-release history. **Action
 needed** lists what an existing install must do after updating;
 UPDATING.md walks a Muse through it.
 
+## 2026-10-22: Web watches from DMs only
+
+Fixed (security):
+
+- Web watches are set only when an owner asks in a DM. In a server,
+  other people's messages reach the same run, so a stranger could steer
+  what the watch checks and which sites the checker visits.
+
+Changed:
+
+- Plugins run with full access; install only ones you trust.
+
+**Action needed:**
+
+- Render the worker prompt again: `python3 bin/render-worker-prompt.py`
+  with the options you used before.
+- If your runtime registered a copy of `hooks/mention-watch.sh`, update
+  the copy.
+- Plugins that call `api.param` must switch to `api.setting`.
+
 ## 2026-10-21: Your Muse reaches out on its own
 
 New:
