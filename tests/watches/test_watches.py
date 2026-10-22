@@ -215,6 +215,24 @@ class Reminders(Base):
                                "text": "again"}))
         self.assertEqual(self.new_sends(), [])
 
+    def test_two_fires_answered_alike_both_post(self):
+        # Discord treats a repeated send nonce as a retry and drops the
+        # second message: each fire's reply needs its own.
+        msg, _ = self.ask(U1)
+        self.outbox(self.reply(msg, [
+            {"op": "add", "kind": "remind", "after": 60, "note": "a"},
+            {"op": "add", "kind": "remind", "after": 180, "note": "b"}]))
+        nonces = []
+        for ahead in (61, 181):
+            self.tick(ahead=ahead)
+            f = self.fires()[0]
+            self.outbox(self.held({"item": f["message_id"], "channel_id": CH,
+                                   "reply_to": f["message_id"],
+                                   "text": "reminder 1"}))
+            (send,) = self.new_sends()
+            nonces.append(send[1].get("nonce"))
+        self.assertNotEqual(nonces[0], nonces[1])
+
     def test_original_gone_pings_requester_in_place(self):
         msg = self.remind(after=60)
         self.alive.discard(msg["id"])                 # deleted meanwhile

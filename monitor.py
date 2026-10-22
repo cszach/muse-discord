@@ -6570,9 +6570,12 @@ def process_outbox(state):
                 # reply, so it notifies nobody and does not count as
                 # addressing the other side (a closing remark that
                 # doesn't ask for an answer).
+                # A fire's nonce is keyed on the fire: two fires answered
+                # alike under one request are two messages, not a retry.
                 send_fragmented(item["channel_id"], parts,
                                 None if item.get("standalone") else reply_to,
-                                attachments, mentions=mentions)
+                                attachments, mentions=mentions,
+                                nonce_key=fire and f"fire:{fire['id']}")
                 print(f"Sent reply to {item.get('author')} in {item.get('channel_name')} "
                       f"({len(parts)} part(s)): {parts[0][:60]}", flush=True)
             for emoji in reactions:
