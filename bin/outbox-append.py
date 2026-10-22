@@ -23,8 +23,8 @@ checks (settings_nl.shape_problems), and so does an item with a
 a `proactive` opt-out / opt-in is "opt-out" or "opt-in" on an item with
 `item`. An item for an owner's DM
 carries that DM's `owner_dm_nonce` from the wake payload, passed
-through as is. A `reply_nonce` or `owner_dm_nonce` missing or different
-from the live one in the monitor's nonce files is refused here, so a worker
+through as is. A `reply_nonce` or `owner_dm_nonce` that differs from
+the live one in the monitor's nonce files is refused here, so a worker
 that mis-copied it finds out at once. The monitor re-validates every
 item on its side. Never needs the bot token and never touches the
 network.
@@ -82,18 +82,22 @@ def _live(name):
 
 
 def nonce_problems(item):
-    """A reply_nonce or owner_dm_nonce missing or different from the live
-    one for its item. Items the files don't list are left to the
-    monitor."""
+    """A reply_nonce or owner-DM nonce that differs from the live one for
+    its item. A missing one is left to the monitor (an out-of-date worker
+    prompt omits it, and the monitor tells the owners); so are items the
+    files don't list."""
     out = []
     mid = str(item.get("item") or item.get("reply_to") or "")
-    for field, name in (("reply_nonce", "item_nonces.json"),
-                        ("owner_dm_nonce", "owner_dm_nonces.json")):
+    dm = item.get("owner_dm_nonce")
+    if dm is None and isinstance(item.get("settings"), dict):
+        dm = item["settings"].get("nonce")   # counts too, as for the monitor
+    for field, given, name in (
+            ("reply_nonce", item.get("reply_nonce"), "item_nonces.json"),
+            ("owner_dm_nonce", dm, "owner_dm_nonces.json")):
         live = _live(name).get(mid)
-        if isinstance(live, str) and item.get(field) != live:
-            what = "is missing" if field not in item else "does not match"
-            out.append(f'{field} {what} for item {mid}: copy its '
-                       f'"{field}" from the wake payload, exactly '
+        if isinstance(live, str) and given is not None and given != live:
+            out.append(f'{field} does not match item {mid}\'s: copy its '
+                       f'"{field}" from the wake payload again, exactly '
                        f'({len(live)} characters)')
     return out
 
