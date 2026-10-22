@@ -72,6 +72,10 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
       - name: Install ffmpeg (security suite's video tests)
+        # The apt mirror sometimes hangs; the video tests skip without
+        # ffmpeg, so a slow mirror must not cancel the whole job.
+        timeout-minutes: 2
+        continue-on-error: true
         run: |
           command -v ffmpeg >/dev/null || {
             sudo apt-get update -qq
