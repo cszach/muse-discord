@@ -6,6 +6,40 @@ entries below the releases are pre-release history. **Action
 needed** lists what an existing install must do after updating;
 UPDATING.md walks a Muse through it.
 
+## v1.0.0 (2026-10-22): First release
+
+Your Muse in Discord. It:
+
+- Talks like a person: waits for people to finish, follows the
+  conversation, and knows when to stop.
+- Changes its settings when you ask in a DM, or through `/settings`
+  (styles: Friends, Community, Work). Every change can be undone.
+- Reads images, videos, PDFs and text files, and makes images and
+  videos for you.
+- Sets reminders and watches: "ping me in 30 minutes", "tell me when
+  someone says pizza", and web watches from your DMs.
+- Reaches out on its own now and then (off unless you turn it on).
+- Stays safe around strangers: every reply is tied to the message it
+  answers, secrets are never sent, it answers nobody in a server none
+  of its owners is in, and server admins can only make it quieter.
+- DMs you when a new version is out, with an **Update now** button.
+- Sends anonymous daily usage counts; DM it "turn off usage stats" to
+  stop them.
+
+The dated entries below list every change before this release.
+
+**Action needed** (only for installs set up before this release):
+
+- Render the worker prompt again: `python3 bin/render-worker-prompt.py`
+  with the options you used before. Until then the bot answers nothing.
+- If your runtime registered a copy of `hooks/mention-watch.sh`, update
+  the copy.
+- Register any hook in SETUP.md step 5's table you don't have yet:
+  `hooks/watchdog-hook.sh`, `hooks/update-watch.sh` and
+  `hooks/watch-due.sh`.
+- Restart the monitor if your update path doesn't.
+- Plugins that call `api.param` must switch to `api.setting`.
+
 ## 2026-10-22: Web watches from DMs only
 
 Fixed (security):
