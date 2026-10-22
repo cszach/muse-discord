@@ -96,6 +96,18 @@ class Outbox(tb.Base):
                     call()
         self.assertEqual(opened, [])
 
+    def test_a_secret_inside_an_uploaded_file(self):
+        m = self.mod
+        leak = os.path.join(m.tmp, "cat.png")
+        with open(leak, "w") as f:
+            f.write("x " + TOKEN)
+        opened = []
+        with mock.patch.object(m.urllib.request, "urlopen",
+                               lambda *a, **k: opened.append(a)), quiet():
+            with self.assertRaises(m.SecretBlocked):
+                m.send_reply_with_files(CH, "ok", [(leak, "cat.png")])
+        self.assertEqual(opened, [])
+
 
 class Disguises(unittest.TestCase):
     """secret_scan.find: the simple disguises, and nothing more."""
@@ -167,6 +179,45 @@ class Tool(unittest.TestCase):
                                       if c[0] in ("POST", "PATCH")])
         finally:
             os.remove(nonces)
+
+    def test_thread_refuses_a_secret_inside_its_upload(self):
+        import test_discord_api as td
+        td.D.TOKEN = TOKEN
+        td.write_owner_items(td.ITEMS)
+        td.D.GENERATED_DIR = os.path.dirname(td.D.OWNER_ITEMS_FILE)
+        td.D.api_multipart = lambda path, payload, f: td.CALLS.append(
+            ("POST", path, payload))
+        upload = os.path.join(td.D.GENERATED_DIR, "cat.png")
+        with open(upload, "w") as f:
+            f.write(f"x {TOKEN}")
+        td.CALLS.clear()
+        try:
+            with self.assertRaises(SystemExit), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                td.D.main(["discord-api.py", *td.SERVER, "thread",
+                           td.GEN_CH, "t", "ok", upload])
+            self.assertFalse([c for c in td.CALLS if c[0] == "POST"])
+        finally:
+            os.remove(upload)
+
+    def test_slot_nonce_and_a_split_thread_are_refused(self):
+        import test_discord_api as td
+        td.D.TOKEN = TOKEN
+        td.write_owner_items(td.ITEMS)
+        slot = os.path.join(os.path.dirname(td.D.OWNER_ITEMS_FILE),
+                            "proactive_nonce.json")
+        with open(slot, "w") as f:
+            json.dump({"7": "7e" * 16}, f)
+        try:
+            for args in (["post", td.GEN_CH, "x " + "7e" * 16],
+                         ["thread", td.GEN_CH, TOKEN[:30], TOKEN[30:]]):
+                td.CALLS.clear()
+                with self.assertRaises(SystemExit), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    td.D.main(["discord-api.py", *td.SERVER, *args])
+                self.assertFalse([c for c in td.CALLS if c[0] == "POST"])
+        finally:
+            os.remove(slot)
 
 
 if __name__ == "__main__":

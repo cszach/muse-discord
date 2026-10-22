@@ -124,23 +124,14 @@ def _load_token():
 TOKEN = _load_token()
 
 
-def build_activity():
-    """The single static activity from config, or None for no activity."""
-    text = str(SETTINGS.presence_status or "").strip()
-    if not text:
-        return None
-    kind = str(SETTINGS.presence_kind or "watching").lower()
-    atype = ACTIVITY_TYPES.get(kind, 3)
-    if atype == 4:
-        return {"name": "Custom Status", "type": 4, "state": text}
-    return {"name": text, "type": atype}
-
-
 def presence_payload():
-    acts = []
-    a = build_activity()
-    if a:
-        acts.append(a)
+    """Online, with the one static activity from config (if any)."""
+    text = str(SETTINGS.presence_status or "").strip()
+    atype = ACTIVITY_TYPES.get(
+        str(SETTINGS.presence_kind or "watching").lower(), 3)
+    acts = [] if not text else [
+        {"name": "Custom Status", "type": 4, "state": text} if atype == 4
+        else {"name": text, "type": atype}]
     return {"status": "online", "activities": acts, "afk": False,
             "since": None}
 

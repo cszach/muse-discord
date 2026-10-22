@@ -28,6 +28,7 @@ real one). The monitor re-validates every item on its side. Never
 needs the bot token and never touches the network.
 """
 import fcntl
+import importlib
 import json
 import os
 import re
@@ -40,8 +41,6 @@ LOCK = os.path.join(PACKAGE_DIR, "reply.lock")
 
 
 NONCE_RE = re.compile(r"[0-9a-f]{32,64}")
-
-
 ID_RE = re.compile(r"[1-9][0-9]{0,19}")
 
 
@@ -52,33 +51,19 @@ def _is_id(value):
         and ID_RE.fullmatch(str(value)) is not None
 
 
-def settings_problems(item):
-    """The monitor's shape rules for a settings action (and for fields
-    starting with _nl, which are the monitor's own)."""
+def module_problems(name, item, *args):
+    """The monitor's own shape rules, from the package module that holds
+    them: settings_nl (a settings action, and fields starting with _nl)
+    or muse_watches (a schedule action)."""
     try:
         if PACKAGE_DIR not in sys.path:
             sys.path.insert(0, PACKAGE_DIR)
-        import settings_nl
+        mod = importlib.import_module(name)
     except Exception as e:  # the monitor checks it anyway
-        print(f"note: could not load settings_nl.py to check the settings "
-              f"action ({e}); the monitor will check it", file=sys.stderr)
+        print(f"note: could not load {name}.py to check the item ({e}); "
+              f"the monitor will check it", file=sys.stderr)
         return []
-    return settings_nl.shape_problems(item, os.path.join(PACKAGE_DIR,
-                                                         "plugins"))
-
-
-def schedule_problems(item):
-    """The monitor's shape rules for a schedule action (reminders and
-    watches; PROTOCOL.md)."""
-    try:
-        if PACKAGE_DIR not in sys.path:
-            sys.path.insert(0, PACKAGE_DIR)
-        import muse_watches
-    except Exception as e:  # the monitor checks it anyway
-        print(f"note: could not load muse_watches.py to check the schedule "
-              f"action ({e}); the monitor will check it", file=sys.stderr)
-        return []
-    return muse_watches.shape_problems(item)
+    return mod.shape_problems(item, *args)
 
 
 def problems(item):
@@ -118,11 +103,12 @@ def problems(item):
     if out:
         return out
     if "schedule" in item:
-        out = schedule_problems(item)
+        out = module_problems("muse_watches", item)
         if out:
             return out
     if "settings" in item or any(str(k).startswith("_nl") for k in item):
-        return settings_problems(item)
+        return module_problems("settings_nl", item,
+                               os.path.join(PACKAGE_DIR, "plugins"))
     if item.get("silent"):
         if not (item.get("reply_to") or item.get("item")):
             out.append("a silent item needs reply_to or item")

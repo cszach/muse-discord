@@ -1,80 +1,31 @@
 #!/usr/bin/env bash
-# muse-discord mention watcher (worker wake hook).
-# Polls the local reply queue written by the Discord monitor (zero tokens:
-# this script never touches the network and has no secrets). Wakes the
-# reply worker ONLY when there is queued work that no worker has
-# recently been woken for.
-#
-# Overlap protection uses hook state (not a lock file the worker must
-# remember to delete): each queue item gets a lease when a wake hands it
-# to a worker, and a wake carries ONLY the items no live lease covers.
-# A message arriving while a worker is busy (say, generating a video)
-# wakes a second worker for just that message, never for the first
-# worker's items, so nothing is drafted or generated twice.
-# An item still open when its lease runs out (LEASE_SECS, long enough
-# for a slow generation) is handed out again, in case its worker died.
-# Items the worker already answered (they have an outbox entry, waiting
-# for the monitor to send them) are never handed out. The worker appends
-# each reply as soon as it is drafted, so part of a wake can be answered
-# while the rest is still in progress; those keep their lease.
-#
-# The payload carries the items plus the persona text, so the worker's
-# happy path is one append per item: no reading the queue or persona
-# files.
-#
-# Monitor liveness: before the queue logic, each run checks that the
-# monitor process exists (its monitor.pid entry, else the same pgrep
-# watchdog.sh uses). When it is gone (say, the VM was replaced and every
-# process died), the script starts `watchdog.sh --from-hook` fully
-# detached and logs one line, so the bot is back within seconds instead
-# of at the next scheduled watchdog run. That never wakes anyone and
-# never touches the token: watchdog.sh does the restart and decides
-# everything else. Attempts are rate limited in hook state (at once,
-# then after 1, 2 and 5 minutes, then every 10 while the monitor stays
-# down; the backoff resets once the monitor stays up for the current
-# window), and none are made after a token rejection (TOKEN REJECTED at
-# the end of monitor.log, or the watchdog's alert saying so): the
-# scheduled watchdog run owns that case, so a reset token is not
-# retried every few seconds. A stuck monitor (alive, stale heartbeat),
-# presence, alerts and update checks stay with the scheduled run.
-#
-# Owner DMs are handed out alone (never in the same wake as anyone
-# else's message), so a server message can never share a worker's
-# context with an owner's DM. A reminder or web watch firing in an
-# owner's DM (kind "reminder" or "watch-met", settings.where "dm") is an
-# owner DM too, and never shares a run with the owner's own messages.
-# Only such a wake gets each DM's
-# owner_dm_nonce, which every outbox item for an owner DM must carry
-# (PROTOCOL.md, Owner DMs); an outbox entry for an owner DM without its
-# nonce (one the monitor will refuse) does not count as answering it.
-# A heartbeat slot (kind "proactive": the bot may reach out on its own;
-# PROTOCOL.md, Unprompted messages) is handed out the same way: alone,
-# never with an owner's DM or anyone's message, and only its wake gets
-# its nonce.
-# Then an owner's server item holding a capability beyond answering
-# itself wakes alone, one per wake: a command (owner_command: true; its
-# owner_command_nonce, which bin/discord-api.py needs for everything) or
-# a web watch capability (its web_nonce; web watches are the owners'
-# only). Only that wake gets those nonces, so no other item's text (its
-# history included) ever shares the run that holds them.
-# Every item's reply_nonce (item_nonces.json) goes only to the wake
-# holding the item's lease; every outbox item must carry its item's, and
-# an outbox entry without it does not count as answering the item, so a
-# run woken by someone else can neither answer nor hide an item it was
-# not handed (PROTOCOL.md, Replies stay with their run).
-#
-# This script targets Muse's hook runtime (it sources
-# $HATCH_HOOK_RUNTIME for the silent/wake/log/hook_state helpers and is
-# registered as a hook whose prompt points at the rendered
-# worker-prompt.md; see SETUP.md, step 5). Other agent runtimes can
-# skip the script entirely and simply poll reply_queue.json themselves;
-# the queue protocol in PROTOCOL.md is the real contract.
+# muse-discord mention watcher (the reply worker's wake hook).
+# Polls the queue the monitor writes (zero tokens: no network, no
+# secrets of its own) and wakes a worker only for open items that no
+# live lease covers:
+# - Leases live in hook state (no lock file to forget). A wake carries
+#   only unleased items, so a message arriving while a worker is busy
+#   wakes a second worker for just that message; an item still open
+#   after LEASE_SECS (its worker died) is handed out again. Items with a
+#   valid outbox entry are never handed out.
+# - Capabilities: owner DMs (and fires in them), a heartbeat slot, and
+#   an owner's server item holding a command or web watch nonce each
+#   wake alone, and only that wake gets their nonces; every item's
+#   reply_nonce goes only to the wake holding its lease (PROTOCOL.md).
+# - The payload carries the items and the persona text, so the worker's
+#   happy path is one append per item.
+# - Monitor liveness: when the monitor process is gone (the VM was
+#   replaced, say), it starts `watchdog.sh --from-hook` fully detached,
+#   with a backoff in hook state (at once, then after 1, 2 and 5
+#   minutes, then every 10) and never after a token rejection: the
+#   scheduled watchdog run owns that, and everything else.
+# It targets Muse's hook runtime ($HATCH_HOOK_RUNTIME; SETUP.md, step 5).
+# Other runtimes can poll reply_queue.json themselves (PROTOCOL.md).
 set -euo pipefail
 # shellcheck source=/dev/null
 source "$HATCH_HOOK_RUNTIME"
 
-# Package dir: the folder containing this hooks/ dir's parent, unless
-# overridden. The queue lives at the package root.
+# The package dir (this hooks/ dir's parent, unless overridden).
 PKG_DIR="${MUSE_DISCORD_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # The package's own Python (bin/install.sh may have made a .venv, and
 # marks it .muse-ok once the packages import there).
@@ -103,7 +54,7 @@ printf -v now '%(%s)T' -1
 # pgrep finds one.
 monitor_alive() {
     local pid="" arg1=""
-    IFS= read -r pid < "$PKG_DIR/monitor.pid" 2>/dev/null || true
+    IFS= read -r pid 2>/dev/null < "$PKG_DIR/monitor.pid" || true
     if [[ $pid =~ ^[0-9]+$ ]] \
         && { IFS= read -r -d '' _ && IFS= read -r -d '' arg1; } \
             2>/dev/null < "/proc/$pid/cmdline" \

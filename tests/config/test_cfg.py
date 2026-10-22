@@ -22,8 +22,10 @@ out = {k: getattr(monitor, k) for k in (
     "COALESCE_SECS", "BOT_COALESCE_SECS", "MAX_REPLY_CHARS",
     "POLL_INTERVAL", "SWEEP_EVERY_CYCLES", "SWEEP_GRACE_SECS",
     "SWEEP_MAX_AGE_SECS", "SWEEP_MAX_RECOVERIES", "BACKOFF_INITIAL_SECS",
-    "BACKOFF_MAX_SECS", "CHANNEL_REFRESH_CYCLES", "DAILY_REPLY_CAP",
-    "PER_USER_DAILY_CAP")}
+    "BACKOFF_MAX_SECS", "CHANNEL_REFRESH_CYCLES")}
+caps = monitor._S0.resolve(monitor.MS.Scope.everywhere())
+out["DAILY_REPLY_CAP"] = caps["limits.per_day"]
+out["PER_USER_DAILY_CAP"] = caps["limits.per_person_per_day"]
 out["HAS_MAX_BOT_TURNS"] = hasattr(monitor, "MAX_BOT_TURNS")
 print("JSON" + json.dumps(out))
 """

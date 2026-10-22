@@ -99,22 +99,21 @@ def _config_path():
         BASE_DIR, "config.yaml")
 
 
-def _import_settings_module():
-    """muse_settings.py from this package (next to monitor.py); a copy
-    elsewhere on sys.path otherwise."""
-    here = os.path.join(BASE_DIR, "muse_settings.py")
-    if os.path.isfile(here):
-        cached = sys.modules.get("muse_settings")
-        if cached is not None and os.path.abspath(
-                getattr(cached, "__file__", "") or "") == here:
-            return cached
-        spec = importlib.util.spec_from_file_location("muse_settings", here)
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["muse_settings"] = mod
-        spec.loader.exec_module(mod)
-        return mod
-    import muse_settings
-    return muse_settings
+def _import_local(name):
+    """name.py from this package (next to monitor.py), as
+    sys.modules[name]; a copy elsewhere on sys.path otherwise."""
+    here = os.path.join(BASE_DIR, name + ".py")
+    if not os.path.isfile(here):
+        return importlib.import_module(name)
+    cached = sys.modules.get(name)
+    if cached is not None and os.path.abspath(
+            getattr(cached, "__file__", "") or "") == here:
+        return cached
+    spec = importlib.util.spec_from_file_location(name, here)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +125,7 @@ def _import_settings_module():
 # Engine internals (timings, the reply size ceiling, guild_ids) are read
 # once here, from engine: (or their old locations).
 # ---------------------------------------------------------------------------
-MS = _import_settings_module()
+MS = _import_local("muse_settings")
 try:
     _SETTINGS = MS.Watcher(_config_path(), PLUGINS_DIR)
 except MS.SettingsError as e:
@@ -134,60 +133,9 @@ except MS.SettingsError as e:
           file=sys.stderr, flush=True)
     sys.exit(1)
 _S0 = _SETTINGS.current
-
-
-def _import_nl():
-    """settings_nl.py (plain-language settings) from this package."""
-    here = os.path.join(BASE_DIR, "settings_nl.py")
-    cached = sys.modules.get("settings_nl")
-    if cached is not None and os.path.abspath(
-            getattr(cached, "__file__", "") or "") == here:
-        return cached
-    if os.path.isfile(here):
-        spec = importlib.util.spec_from_file_location("settings_nl", here)
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["settings_nl"] = mod
-        spec.loader.exec_module(mod)
-        return mod
-    import settings_nl
-    return settings_nl
-
-
-NL = _import_nl()
-
-
-def _import_watches():
-    """muse_watches.py (reminders and watches) from this package."""
-    here = os.path.join(BASE_DIR, "muse_watches.py")
-    cached = sys.modules.get("muse_watches")
-    if cached is not None and os.path.abspath(
-            getattr(cached, "__file__", "") or "") == here:
-        return cached
-    spec = importlib.util.spec_from_file_location("muse_watches", here)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["muse_watches"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-W = _import_watches()
-
-
-def _import_scan():
-    """secret_scan.py (the outgoing secret filter) from this package."""
-    here = os.path.join(BASE_DIR, "secret_scan.py")
-    cached = sys.modules.get("secret_scan")
-    if cached is not None and os.path.abspath(
-            getattr(cached, "__file__", "") or "") == here:
-        return cached
-    spec = importlib.util.spec_from_file_location("secret_scan", here)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["secret_scan"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-SCAN = _import_scan()
+NL = _import_local("settings_nl")      # settings requests in plain words
+W = _import_local("muse_watches")      # reminders and watches
+SCAN = _import_local("secret_scan")    # the outgoing secret filter
 
 # Anonymous daily usage counts (telemetry.py; README, "Privacy and usage
 # stats"). Off with telemetry.usage_stats: off or MUSE_DISCORD_TELEMETRY=off.
@@ -315,10 +263,9 @@ def _cfg_num(section, key, default, cast, name, minimum=None,
              maximum=None):
     """Resolve one numeric setting. Only a missing or null value means
     "use the default": an explicit 0 is honored wherever 0 is a real
-    setting (the old `value or default` silently turned it back into the
-    default). Where a value would busy-loop, divide by zero, or blank
+    setting. Where a value would busy-loop, divide by zero, or blank
     every reply, it is clamped into [minimum, maximum] with a warning
-    printed once, here at import, instead of being silently replaced."""
+    printed once, here at import."""
     raw = section.get(key)
     if raw is None:
         return cast(default)
@@ -354,16 +301,6 @@ if "name" in (_OLD_BEHAVIOR.get("respond_to") or []) \
 if _OLD_BEHAVIOR.get("max_bot_turns") is not None:
     print("WARNING: behavior.max_bot_turns was removed and is ignored; "
           "the worker ends bot conversations by judgment.", flush=True)
-# Informational (the resolved everywhere / DM values at import); the
-# pipeline resolves the settings per scope through settings().
-_E0 = _S0.resolve(MS.Scope.everywhere())
-_D0 = _S0.resolve(MS.Scope.dm())
-BOTS_POLICY = "direct" if _E0["who.bots"] == "when-addressed" else "off"
-DM_POLICY = "off" if _D0["who.replies"] == "off" else (
-    "owner_only" if _D0["who.dms_from"] == "owners" else "open")
-INJECTION_QUARANTINE = _E0["privacy.suspicious"] != "answer"
-DAILY_REPLY_CAP = _E0["limits.per_day"]                  # None = off
-PER_USER_DAILY_CAP = _E0["limits.per_person_per_day"]    # None = off
 # The conversational follow-up window (who.replies: conversational).
 FOLLOW_UP_WINDOW_SECS = 120
 # Test-only (the e2e harness's driver bots stand in for people): these
@@ -375,6 +312,11 @@ if TREAT_AS_HUMAN:
     print(f"WARNING: testing.treat_as_human is set: {len(TREAT_AS_HUMAN)} "
           f"bot account(s) are treated as humans. Test servers only.",
           flush=True)
+
+
+def _who(msg):
+    """A message's author object ({} when it has none)."""
+    return msg.get("author") or {}
 
 
 def is_bot_author(author):
@@ -462,6 +404,7 @@ API = "https://discord.com/api/v10"
 
 # The bot's own identity, fetched at startup. Used to recognize mentions,
 # skip the bot's own messages, and compute its channel permissions.
+# BOT_USER_ID is the same id (proactive.py reads it).
 BOT_ID = None
 BOT_NAME = None
 BOT_USER_ID = None
@@ -470,9 +413,6 @@ BOT_USER_ID = None
 # reply worker can actually see them (the worker has no network access).
 MAX_MEDIA_BYTES = 8 * 1024 * 1024
 MAX_MEDIA_PER_MESSAGE = 6
-
-# Bot's own user id (fetched at startup); used to skip its own DM messages.
-BOT_USER_ID = None
 MEDIA_TTL_SECS = 3600  # downloaded media older than this is swept each poll
 # Embeds are only downloaded from known media hosts (attachments always
 # come from the chat CDN). Keeps a malicious link unfurl from becoming a
@@ -524,26 +464,12 @@ PDFTOTEXT_TIMEOUT = 30
 GENERATED_TTL_SECS = 3600
 DISCORD_MAX_BYTES = 8 * 1024 * 1024  # unboosted server upload cap
 
-# A message "is an owner command" if it opens with an action verb, optionally
-# Owner-command gating is ID-based, not keyword-based: the monitor stamps
-# owner_command purely from the author's Discord user ID. Deciding whether
-# the owner's message is actually asking the bot to DO something is the
-# worker's job (natural-language understanding), not a regex's.
-# Strangers never get the flag, so the discord-api.py tool stays locked
-# for them no matter what their message text claims.
-
 # Conversation history: rolling window of recent messages kept per
 # channel/DM so the reply worker drafts with context. Stored in state.json,
 # attached to queue items (minus the triggering message itself).
 HISTORY_PER_CHANNEL = 12
 HISTORY_TEXT_CHARS = 300
 HISTORY_ATTACHED = 8
-
-# Burst coalescing: a trigger (mention / DM) waits
-# behavior.coalesce_seconds before entering the reply queue, so
-# rapid-fire follow-ups from the same author in the same channel fold
-# into ONE reply instead of one reply per message. (COALESCE_SECS is
-# resolved from config in the header block.)
 
 # Channels and guilds are discovered live at startup and refreshed
 # periodically: every channel/thread the bot can read, across every
@@ -666,16 +592,6 @@ def _no_access(e):
     return getattr(e, "code", None) in (403, 404)
 
 
-def run_to_end(gen):
-    """Run a sliceable REST generator (one that yields after each
-    request, see "Sliced REST work") to completion; its return value."""
-    while True:
-        try:
-            next(gen)
-        except StopIteration as e:
-            return e.value
-
-
 def discover_channels(previous=None):
     """Return ({channel_id: info}, {guild_id: guild_info}).
 
@@ -693,7 +609,12 @@ def discover_channels(previous=None):
     off from a 429), the previous entries are kept as they were instead
     of unmonitoring those channels (no poll, no sweep) until the next
     refresh."""
-    return run_to_end(discover_channels_iter(previous))
+    gen = discover_channels_iter(previous)
+    while True:
+        try:
+            next(gen)
+        except StopIteration as e:
+            return e.value
 
 
 def discover_channels_iter(previous=None):
@@ -787,29 +708,6 @@ def discover_channels_iter(previous=None):
     return found, guilds_out
 
 
-def discover_threads_for_guild(gid, gname, names_by_id, known_ids,
-                               perms_by_id=None, previous=None):
-    """Return {thread_id: info} for active threads in one guild that the
-    bot can read and whose ids aren't in known_ids yet.
-
-    Forum posts and text-channel threads are separate channels that never
-    appear in /guilds/{id}/channels, so they are discovered via the
-    active-threads endpoint instead. The display name is parent-qualified
-    ("help > <post title>") so logs and queue items show where a message
-    actually lives. Archived threads are skipped on purpose: a reply
-    un-archives a thread, and the next refresh picks it back up.
-
-    A thread's send permission comes from its parent channel: the bot
-    needs Send Messages in Threads there (Send Messages on the parent is
-    also accepted; the send-time 403 net catches any residual mismatch).
-    perms_by_id maps parent channel id -> effective permissions; when it
-    is None (light thread-only refresh), can_send is left unknown.
-    previous: as in discover_channels, kept on transient failures."""
-    return run_to_end(discover_threads_iter(gid, gname, names_by_id,
-                                            known_ids, perms_by_id,
-                                            previous))
-
-
 # Brand-new threads. A thread created since the previous successful
 # thread listing of its guild (or since the monitor started) is seeded at
 # its own id, not at its newest message: a mention posted in it before
@@ -827,8 +725,19 @@ _NEW_THREADS = set()         # thread ids to seed at their start
 
 def discover_threads_iter(gid, gname, names_by_id, known_ids,
                           perms_by_id=None, previous=None):
-    """discover_threads_for_guild as a generator that yields after each
-    request (see discover_channels_iter)."""
+    """{thread_id: info} for the active threads in one guild that the bot
+    can read and whose ids aren't in known_ids yet, as a generator that
+    yields after each request (see discover_channels_iter).
+
+    Forum posts and threads never appear in /guilds/{id}/channels, so
+    they come from the active-threads endpoint. The display name is
+    parent-qualified ("help > <post title>"). Archived threads are
+    skipped: a reply un-archives a thread, and the next refresh picks it
+    up. A thread's send permission comes from its parent (Send Messages
+    in Threads, or Send Messages; the send-time 403 net catches the
+    rest): perms_by_id maps parent id -> permissions, and None (the
+    thread-only refresh) leaves can_send unknown. previous: as in
+    discover_channels, kept on transient failures."""
     out = {}
     previous = previous or {}
     listed_at = time.time()
@@ -953,12 +862,10 @@ def headers():
 
 
 # ---------------------------------------------------------------------------
-# REST rate-limit tracker (2026-10-15, per RATE_LIMIT_BACKOFF_SPEC.md).
-# Discord 429s are per-IP (shared egress), and the old code answered every
-# 429 with another ~40-request poll burst 30s later, keeping the limit
-# tripped. Now any 429 from api_get/api_post records a backoff window
-# (Retry-After honored, else exponential), and the main loop gates all
-# REST-initiated work on it. The gateway path and outbox sends keep running.
+# REST rate limits. Discord 429s are per IP (shared egress), so any 429
+# records a backoff window (Retry-After honored, else exponential), and
+# the main loop holds all REST-initiated work (polls, sweeps, discovery)
+# until it passes. The gateway path and outbox sends keep running.
 # ---------------------------------------------------------------------------
 _rl_until = 0.0
 _rl_backoff_step = 0
@@ -1082,12 +989,12 @@ def api_get(path):
 # every nonce file; the nonces bind what it writes to the outbox, but
 # only this filter keeps a secret it read from being posted. Before any
 # send to Discord (replies, fires, owner DMs and notices, edits,
-# interaction responses, uploads), the payload is checked: the bot token
+# interaction responses, uploads and their files), the payload is
+# checked: the bot token
 # itself, any nonce the monitor holds live, or anything shaped like a
 # Discord token (three base64url segments, the first decoding to a
 # snowflake) drops the send (SecretBlocked), logged without the value,
-# and the owners are DMed about it once a day. Any other 32-hex-digit
-# string (a nonce's shape) in visible text is blanked.
+# and the owners are DMed about it once a day. Nothing is ever altered.
 # ---------------------------------------------------------------------------
 class SecretBlocked(Exception):
     """A send held back because it carried a secret (never retried)."""
@@ -1101,9 +1008,9 @@ def _live_nonces():
     maps, and the "nonce" fields of owner_items and the web checks
     (never other fields, such as a check's public group tag)."""
     out = set()
-    for cache in ("_NL_NONCES_WRITTEN", "_ITEM_NONCES_WRITTEN",
-                  "_WEB_NONCES_WRITTEN"):
-        body = (globals().get(cache) or {}).get("body")
+    for cache in (_NL_NONCES_WRITTEN, _ITEM_NONCES_WRITTEN,
+                  _WEB_NONCES_WRITTEN):
+        body = cache.get("body")
         if isinstance(body, dict):
             out |= {v for v in body.values() if isinstance(v, str) and v}
     try:   # a live heartbeat slot's nonce (proactive.py)
@@ -1121,8 +1028,8 @@ def _live_nonces():
         elif isinstance(v, list):
             for x in v:
                 walk(x)
-    for cache in ("_OWNER_ITEMS_WRITTEN", "_WEB_DUE_WRITTEN"):
-        walk((globals().get(cache) or {}).get("body"))
+    for cache in (_OWNER_ITEMS_WRITTEN, _WEB_DUE_WRITTEN):
+        walk(cache.get("body"))
     return out
 
 
@@ -1167,24 +1074,17 @@ def _secret_alert(where):
         return
     _SECRET_ALERT.update(day=day, busy=True)
     try:
-        for uid in sorted(OWNER_USER_IDS):
-            dm_owner(uid, {"content": (
-                "I blocked a reply that looked like it contained a "
-                "secret (a token or one of my private codes), so that "
-                "reply wasn't sent. monitor.log says where. I tell you "
-                "about this at most once a day."),
-                "allowed_mentions": {"parse": []}})
-    except Exception as e:
-        print(f"Could not alert the owners about a blocked send: {e}",
-              flush=True)
+        notify_owners("I didn't send a reply because it looked like it "
+                      "held a secret (my bot token or one of my private "
+                      "codes). I tell you about this at most once a day.")
     finally:
         _SECRET_ALERT["busy"] = False
 
 
-def api_post(path, data):
-    data = guard_outgoing(data, path)
-    body = json.dumps(data).encode()
-    req = urllib.request.Request(API + path, data=body, headers=headers())
+def _api_send(method, path, data):
+    body = json.dumps(guard_outgoing(data, path)).encode()
+    req = urllib.request.Request(API + path, data=body, headers=headers(),
+                                 method=method)
 
     def _do():
         with urllib.request.urlopen(req, timeout=20) as r:
@@ -1192,21 +1092,33 @@ def api_post(path, data):
     return _api_call(_do)
 
 
-def atomic_write(path, obj):
-    # A unique temp file per write: with one fixed "<path>.tmp", two
-    # writers (the monitor and the worker) could interleave on the same
-    # temp file and rename each other's half-written JSON into place.
-    try:
-        mode = os.stat(path).st_mode & 0o777
-    except OSError:
-        mode = 0o644
+def api_post(path, data):
+    return _api_send("POST", path, data)
+
+
+def api_patch(path, data):
+    return _api_send("PATCH", path, data)
+
+
+def atomic_write(path, obj, mode=None, text=None):
+    """Write JSON (obj, or text already serialized) to path via a unique
+    temp file and a rename (two writers on one fixed "<path>.tmp" could
+    rename each other's half-written file into place). The file keeps its
+    mode unless mode is given."""
+    if text is None:
+        text = json.dumps(obj)
+    if mode is None:
+        try:
+            mode = os.stat(path).st_mode & 0o777
+        except OSError:
+            mode = 0o644
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".",
                                prefix="." + os.path.basename(path) + ".",
                                suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
             os.fchmod(f.fileno(), mode)
-            json.dump(obj, f)
+            f.write(text)
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -1249,6 +1161,25 @@ def shared_lock():
         os.close(fd)  # closing the descriptor releases the flock
 
 
+def _keep_last(d, n):
+    """Bound a dict to its n newest keys (insertion order)."""
+    for k in list(d)[:-n]:
+        del d[k]
+
+
+def _read_json(path, kind=dict):
+    """path's JSON: an empty `kind` when the file is missing, None when it
+    is unreadable or not a `kind` (dict or list)."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return kind()
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, kind) else None
+
+
 def load_queue():
     """The queue as it is on disk now (a snapshot: writes are atomic
     renames, so reading needs no lock)."""
@@ -1280,10 +1211,10 @@ def _queue_apply(add=(), drop=None):
 def queue_edit(add=(), drop=None):
     """Apply a delta to reply_queue.json under the shared lock: re-read
     it, remove the items drop(item) is true for, append the items in add
-    whose message_id is not queued yet. The main loop used to write back
-    a copy loaded before slow work (media downloads, the sweep), which
-    resurrected items the worker had removed and deleted items appended
-    meanwhile. Returns the number of items appended."""
+    whose message_id is not queued yet. Never write back a copy loaded
+    before slow work (media downloads, the sweep): it would resurrect
+    removed items and drop ones appended meanwhile. Returns the number
+    of items appended."""
     with shared_lock():
         return _queue_apply(add, drop)
 
@@ -1311,14 +1242,21 @@ def load_state():
     return state
 
 
+_STATE_WRITTEN = {"text": None}
+
+
 def save_state(state):
-    # Bound the replied_to list so state.json doesn't grow forever
+    """Write state.json, unless it holds exactly this already (the main
+    loop saves several times a tick, mostly with nothing changed)."""
     state["replied_to"] = state["replied_to"][-200:]
-    atomic_write(STATE_FILE, state)
+    text = json.dumps(state)
+    if text != _STATE_WRITTEN["text"] or not os.path.exists(STATE_FILE):
+        atomic_write(STATE_FILE, None, text=text)
+        _STATE_WRITTEN["text"] = text
 
 
 def is_suspicious(content):
-    """Check message against injection patterns. Returns matched pattern or None."""
+    """The injection pattern content matches, else False."""
     lowered = content.lower()
     for pat in INJECTION_PATTERNS:
         if re.search(pat, lowered):
@@ -1344,10 +1282,13 @@ def quarantine(msg, channel_name, matched_pattern, fragments=()):
         entry["fragments"] = [{"message_id": f["id"],
                                "content": f.get("content", "")}
                               for f in fragments]
-    q = []
-    if os.path.exists(QUARANTINE_FILE):
-        with open(QUARANTINE_FILE) as f:
-            q = json.load(f)
+    q = _read_json(QUARANTINE_FILE, list)
+    if q is None:   # kept for the owner, never silently emptied
+        with contextlib.suppress(OSError):
+            os.replace(QUARANTINE_FILE, QUARANTINE_FILE + ".bad")
+        print("quarantine.json was unreadable; moved to quarantine.json.bad.",
+              flush=True)
+        q = []
     q.append(entry)
     atomic_write(QUARANTINE_FILE, q[-100:])  # keep last 100
     ledger_record_many([msg["id"]] + [f["id"] for f in fragments],
@@ -1360,26 +1301,19 @@ def quarantine(msg, channel_name, matched_pattern, fragments=()):
 
 
 # ---------------------------------------------------------------------------
-# Mention ledger (2026-10-15): the durable record that makes silent drops
-# impossible. Every mention/DM reaching a terminal state (replied,
-# quarantined, skipped with a reason) is written here, and the
-# reconciliation sweep (sweep_mentions) diffs recent channel mentions
-# against it and requeues anything unaccounted for. Before this, a mention
-# could die at any pipeline stage (storm, kill mid-cycle, enqueue failure,
-# worker drop) with no trace and no recovery.
+# Mention ledger: the durable record that makes silent drops impossible.
+# Every mention/DM reaching a terminal state (replied, quarantined,
+# skipped with a reason) is written here, and the reconciliation sweep
+# (sweep_mentions) diffs recent channel mentions against it and requeues
+# anything unaccounted for.
 # ---------------------------------------------------------------------------
 LEDGER_TERMINAL = ("replied", "quarantined", "skipped")
 
 
 def _ledger_load():
-    if os.path.exists(LEDGER_FILE):
-        try:
-            with open(LEDGER_FILE) as f:
-                d = json.load(f)
-            if isinstance(d, dict) and isinstance(d.get("entries"), dict):
-                return d
-        except Exception:
-            pass
+    d = _read_json(LEDGER_FILE)
+    if d and isinstance(d.get("entries"), dict):
+        return d
     return {"entries": {}}
 
 
@@ -1442,8 +1376,8 @@ def ledger_record_many(mids, status, reason="", channel_id=None,
     _ledger_save(d)
 
 
-# Reason codes for the ledger (2026-10-19), from the reason text every
-# caller already writes: what /settings' "Why no reply?" explains.
+# Reason codes for the ledger, from the reason text every caller
+# writes: what /settings' "Why no reply?" explains.
 _LEDGER_CODES = (
     ("settings: who.replies is off", "replies-off"),
     ("settings: none of the owners is in", "ownerless"),
@@ -1476,10 +1410,7 @@ _LEDGER_CODES = (
 
 def ledger_code(status, reason=""):
     """A ledger entry's reason code: replied, queued, quarantined, or why
-    a message was skipped (replies-off, ownerless, dm-off, bots-ignore,
-    not-allowed, dm-not-allowed, cap, bot-exchange, suspicious-ignored,
-    predates-join, no-send, internal, worker-skipped, send-failed,
-    never-share, watch-cap, watch-not-allowed, watch-held, other)."""
+    a message was skipped (dm-off, a _LEDGER_CODES code, else other)."""
     if status in ("replied", "queued", "quarantined"):
         return status
     if status == "enqueue_failed":
@@ -1512,18 +1443,13 @@ def _ledger_terminal(mid):
 
 
 def _quarantine_ids():
-    if os.path.exists(QUARANTINE_FILE):
-        try:
-            with open(QUARANTINE_FILE) as f:
-                ids = set()
-                for e in json.load(f):
-                    ids.add(e.get("message_id"))
-                    ids.update(fr.get("message_id")
-                               for fr in e.get("fragments") or [])
-                return ids
-        except Exception:
-            pass
-    return set()
+    ids = set()
+    for e in _read_json(QUARANTINE_FILE, list) or []:
+        if isinstance(e, dict):
+            ids.add(e.get("message_id"))
+            ids.update(fr.get("message_id") for fr in e.get("fragments") or []
+                       if isinstance(fr, dict))
+    return ids
 
 
 def _snowflake_ts(mid):
@@ -1533,21 +1459,16 @@ def _snowflake_ts(mid):
         return 0.0
 
 
-def rate_allows(state, user_id, channel_id=None, scope=None):
-    """Enforce limits.per_day and limits.per_person_per_day (none = off).
+def rate_block(state, user_id, channel_id=None, scope=None):
+    """Enforce limits.per_day and limits.per_person_per_day (none = off):
+    None when allowed, else the cap that stops it, {"key", "counter"
+    ("everywhere", "server:<id>", "dms": where the cap is set), "cap"}.
     Each cap counts what happens in the scope WHERE IT IS SET (everywhere
     = one total across DMs and every server, a server = that server, dms
     = all DMs), and every cap set along the message's scope applies.
     Owners are never capped or counted: these limits bound abuse and
     token spend from strangers, not the owner's own use of the bot.
     Counted at queue time, one per burst."""
-    return rate_block(state, user_id, channel_id, scope) is None
-
-
-def rate_block(state, user_id, channel_id=None, scope=None):
-    """rate_allows, saying which cap stops it: None (allowed) or {"key",
-    "counter" ("everywhere", "server:<id>", "dms": where the cap is set),
-    "cap"}."""
     if user_id in OWNER_USER_IDS:
         return None
     if scope is None:
@@ -1591,7 +1512,7 @@ def rate_block(state, user_id, channel_id=None, scope=None):
 
 def rate_record(state, user_id, scope=None):
     """Count one queued item against every counter of its scope (see
-    rate_allows). Owners are not counted."""
+    rate_block). Owners are not counted."""
     if user_id in OWNER_USER_IDS:
         return
     rate = state["rate"]
@@ -1733,7 +1654,7 @@ def people_match(value, user_id, roles=lambda: set()):
 def who_allows(msg, guild_id, resolved):
     """who.allow / who.ignore for a message's author (owners always
     pass; ignore wins over allow)."""
-    author = msg.get("author", {}) or {}
+    author = _who(msg)
     uid = str(author.get("id") or "")
     if uid in OWNER_USER_IDS:
         return True
@@ -1860,7 +1781,7 @@ def addresses_someone_else(msg):
     another user or a role (the bot's own mention is direct address)."""
     if msg.get("message_reference"):
         rm = msg.get("referenced_message") or {}
-        if (rm.get("author", {}) or {}).get("id") != BOT_ID:
+        if _who(rm).get("id") != BOT_ID:
             return True
     if any((m or {}).get("id") != BOT_ID for m in msg.get("mentions") or []):
         return True
@@ -1871,7 +1792,7 @@ def follow_up_open(state, msg):
     """True when msg falls in its author's open follow-up window in its
     channel (and does not address someone else, which closes it)."""
     fu = (state or {}).get("follow_up") or {}
-    author = msg.get("author", {}) or {}
+    author = _who(msg)
     key = f"{msg.get('channel_id')}:{author.get('id')}"
     opened = fu.get(key)
     if opened is None or is_bot_author(author):
@@ -1902,16 +1823,18 @@ def own_replies_in_run(history, msg):
     return n
 
 
-def notify_owners(text, components=None):
-    """DM every owner (with message components, e.g. buttons, when
-    given). Returns True when at least one DM landed (or there is nobody
-    to tell). Never raises."""
+def notify_owners(text, components=None, flags=None):
+    """DM every owner (with message components, e.g. buttons, and
+    message flags when given). Returns True when at least one DM landed
+    (or there is nobody to tell). Never raises."""
     if not OWNER_USER_IDS:
         print(f"Owner notice (no owners configured): {text}", flush=True)
         return True
     payload = {"content": text[:1990], "allowed_mentions": {"parse": []}}
     if components:
         payload["components"] = components
+    if flags:
+        payload["flags"] = flags
     delivered = False
     for uid in sorted(OWNER_USER_IDS):
         if dm_owner(uid, payload):
@@ -1944,20 +1867,19 @@ def _join_summary(gid, ginfo, channels):
         shown += f", and {len(visible) - 40} more"
     st = settings()
     res = st.resolve(MS.Scope.server(gid, name))
+    seen = f"Channels I can see ({len(visible)}): {shown or 'none'}\n"
     if owners_absent(gid) and OWNER_IN_GUILD.get(gid) is None:
-        return (f"I was added to **{name}** (server ID {gid}). I couldn't "
-                f"check yet whether any of you is a member there, so I "
-                f"answer nobody there for now.\n"
-                f"Channels I can see ({len(visible)}): {shown or 'none'}\n"
-                f"If you want me to talk there, press **Configure** and "
-                f"choose When it answers.")
+        return (f"I was added to **{name}**. I couldn't check yet whether "
+                f"any of you is in that server, so I'm not answering "
+                f"anyone there for now.\n{seen}"
+                f"To let me talk there, press **Configure** and pick When "
+                f"it answers.")
     if owners_absent(gid):
-        return (f"I was added to **{name}** (server ID {gid}), where none "
-                f"of you is a member, so I answer nobody there.\n"
-                f"Channels I can see ({len(visible)}): {shown or 'none'}\n"
-                f"If you want me to talk there, press **Configure** and "
-                f"choose When it answers. To remove me, a server admin "
-                f"there can kick me.")
+        return (f"I was added to **{name}**, a server none of you is in, "
+                f"so I'm not answering anyone there.\n{seen}"
+                f"To let me talk there, press **Configure** and pick When "
+                f"it answers. To remove me, a server admin there can kick "
+                f"me.")
     replies = {"off": "I stay quiet there",
                "when-addressed": "I answer @mentions and replies to my "
                                  "messages there",
@@ -1967,19 +1889,14 @@ def _join_summary(gid, ginfo, channels):
     on = (["image and video generation"] if res.get("media.enabled")
           else []) + [pid for pid in sorted(st.manifests)
                       if res.get(f"plugins.{pid}.enabled")]
-    how = (f"set servers.\"{gid}\" in config.yaml (no restart needed)"
-           if st.layout == "new" else
-           f"add \"{gid}\" to behavior.active_guild_ids in config.yaml "
-           f"(no restart needed)")
-    return (f"I just joined **{name}** (server ID {gid}).\n"
+    return (f"I just joined **{name}**.\n"
             f"{replies.get(res['who.replies'], replies['when-addressed'])}"
-            f". Extras on there: {', '.join(on) or 'none'}.\n"
-            f"Channels I can see ({len(visible)}): {shown or 'none'}\n"
-            f"To change what I do there, press "
-            f"**Configure** (or use /settings), or {how}.")
+            f". Extras on there: {', '.join(on) or 'none'}.\n{seen}"
+            f"To change what I do there, press **Configure** or use "
+            f"/settings{', or just tell me here' if dms_enabled() else ''}.")
 
 
-# Servers none of the owners is in (2026-10-21). A public bot can be
+# Servers none of the owners is in. A public bot can be
 # added to any server by anyone with its install link, and there it would
 # answer strangers on the owner's Muse. So in a server where no owner is a
 # member it answers nobody until an owner chooses When it answers for that
@@ -1988,10 +1905,11 @@ def _join_summary(gid, ginfo, channels):
 # shared-servers. Membership is checked when the bot joins a server (it
 # counts as ownerless until a check says otherwise), then hourly while no
 # owner is there; failed checks back off and the oldest due go first, a
-# few per pass. Servers the bot was in before (the first run's, or from
-# before this check existed) are not checked: the owner set the bot up
-# there. An owner's own message in a server settles it at once. The
-# record lives in state.json, so a restart keeps it.
+# few per pass. A first run (no state.json, or a lost one) checks every
+# server at once: a lost state.json must not open the gate. Servers
+# known from before this check existed are not checked. An owner's own
+# message in a server settles it at once. The record lives in
+# state.json, so a restart keeps it.
 # state["owner_in_guild"]: {gid: {"in": an owner is a member,
 #   "checked": a check has answered, "next": when to check, "fails": n}}
 # OWNER_IN_GUILD mirrors it: True, False (no owner), None (not checked
@@ -2045,10 +1963,10 @@ def note_guild_join_for_owners(state, gid):
     OWNER_IN_GUILD.setdefault(gid, None)
 
 
-def check_owner_presence(state, guilds, joined=()):
+def check_owner_presence(state, guilds, joined=(), every=False):
     """Check the servers due for an owner check (just joined, or still
-    ownerless), oldest due first, a few per pass; then refresh the
-    mirror."""
+    ownerless), oldest due first, a few per pass (every: all of them);
+    then refresh the mirror."""
     mirror_owner_presence(state)
     seen = state["owner_in_guild"]
     now = time.time()
@@ -2061,7 +1979,7 @@ def check_owner_presence(state, guilds, joined=()):
     if OWNER_USER_IDS and not rest_backing_off():
         due = sorted((e["next"], gid) for gid, e in seen.items()
                      if not e["in"] and e["next"] <= now and gid in guilds)
-        for _next, gid in due[:OWNER_CHECKS_PER_PASS]:
+        for _next, gid in due[:None if every else OWNER_CHECKS_PER_PASS]:
             e = seen[gid]
             res = owner_member(gid)
             if res is None:
@@ -2111,8 +2029,8 @@ def configure_button(gid):
 
 def sync_guilds(state, guilds, channels):
     """Record each guild's join watermark and greet newly joined guilds
-    (observe mode, owner DM). The first run seeds the known set silently:
-    the owner just set the bot up there."""
+    (owner DM). The first run seeds the known set silently, but checks
+    every server for an owner (see check_owner_presence)."""
     if not guilds:
         return  # discovery failed; a partial view must not look like joins
     first_run = "known_guilds" not in state
@@ -2131,8 +2049,9 @@ def sync_guilds(state, guilds, channels):
                   flush=True)
             if gid not in notices:
                 notices.append(gid)
-    check_owner_presence(state, guilds,
-                         [g for g in notices if g in guilds])
+    check_owner_presence(state, guilds, list(guilds) if first_run
+                         else [g for g in notices if g in guilds],
+                         every=first_run)
     flush_join_notices(state, guilds, channels)
     try:
         warn_stale_labels()
@@ -2256,15 +2175,6 @@ def release_version(value):
     return tuple(int(x) for x in m.groups()) if m else None
 
 
-def _read_json_dict(path):
-    try:
-        with open(path) as f:
-            d = json.load(f)
-    except (OSError, ValueError):
-        return {}
-    return d if isinstance(d, dict) else {}
-
-
 def _version_installed(tag, timeout=5):
     """True when HEAD already contains the release tag (updated by hand
     before the notice went out, or since). False when git cannot tell,
@@ -2299,15 +2209,14 @@ def update_notice_text(info):
         if len(entries) > UPDATE_ENTRIES_SHOWN:
             lines.append(f"- +{len(entries) - UPDATE_ENTRIES_SHOWN} more")
     else:
-        lines.append("What's new is in CHANGELOG.md.")
+        lines.append("See the changelog for what's new.")
     if info.get("action_needed"):
         lines.append("Some changes need a step from you; your Muse walks "
                      "you through them.")
     lines.append(f"**Update now**: your Muse updates to {version} in its "
-                 "main chat by following UPDATING.md, and asks before "
-                 "touching anything you customized. **Later**: skip "
-                 f"{version}; you are asked again when a newer version "
-                 "ships.")
+                 "main chat and asks before touching anything you "
+                 f"changed. **Later**: skip {version}; I'll ask again when "
+                 "a newer version comes out.")
     return "\n".join(lines)[:1990]
 
 
@@ -2327,7 +2236,7 @@ def announce_update(state):
     _update_announced["version"] = upd.get("version")
     if not updates_enabled():
         return
-    info = _read_json_dict(UPDATE_CHECK_FILE)
+    info = _read_json(UPDATE_CHECK_FILE) or {}
     version = info.get("latest")
     new = release_version(version)
     last = release_version(upd.get("version"))
@@ -2422,6 +2331,15 @@ def ephemeral(text):
                                 "allowed_mentions": {"parse": []}}}
 
 
+def closed_card(ix, line):
+    """The clicked message, buttons removed, with line added: what was
+    chosen."""
+    original = (ix.get("message") or {}).get("content") or ""
+    return {"type": 7, "data": {
+        "content": original[:1990 - len(line)] + "\n\n" + line,
+        "components": [], "allowed_mentions": {"parse": []}}}
+
+
 def interaction_user_id(ix):
     user = (ix.get("member") or {}).get("user") or ix.get("user") or {}
     return str(user.get("id") or "")
@@ -2487,9 +2405,8 @@ def on_update_button(ix, rest, uid, record):
     if version != announced:
         if release_version(announced) \
                 and release_version(version) < release_version(announced):
-            return ephemeral(f"That update prompt is out of date: "
-                             f"{announced} is out since. Use the newest "
-                             f"prompt.")
+            return ephemeral(f"This message is out of date: {announced} "
+                             f"is out now. Use the newest update message.")
         return ephemeral("That control is no longer active.")
     # Short timeout: the whole answer must land within Discord's 3s.
     if _version_installed(version, timeout=1):
@@ -2497,7 +2414,8 @@ def on_update_button(ix, rest, uid, record):
                          f"do.")
     now = int(time.time())
     if action == "now":
-        if _read_json_dict(UPDATE_REQUEST_FILE).get("version") != version:
+        if (_read_json(UPDATE_REQUEST_FILE) or {}).get("version") \
+                != version:
             try:
                 atomic_write(UPDATE_REQUEST_FILE, {
                     "version": version, "requested_at": now, "by": uid})
@@ -2509,14 +2427,11 @@ def on_update_button(ix, rest, uid, record):
         line = (f"**Update now** chosen. Your Muse is starting the update "
                 f"to {version} in its main chat.")
     else:
-        line = (f"**Later** chosen. {version} will not be offered again; "
-                f"a newer version will be.")
+        line = (f"**Later** chosen. I won't offer {version} again, only "
+                f"newer versions.")
     record({"kind": "update_choice", "version": version, "action": action,
             "by": uid, "at": now})
-    original = (ix.get("message") or {}).get("content") or ""
-    return {"type": 7, "data": {
-        "content": original[:1990 - len(line)] + "\n\n" + line,
-        "components": [], "allowed_mentions": {"parse": []}}}
+    return closed_card(ix, line)
 
 
 register_interaction("mdupd", on_update_button)
@@ -2578,10 +2493,10 @@ def hold_reply(state, item, qid, parts):
         "at": time.time(), "qid": qid, "where": where, "to": to}
     _holds_live[hid] = time.time()
     _settle(state, item, "skipped", "held for owner review (never_share)")
-    head = (f"**Held a reply** to {to} in {where}: it contains a phrase "
-            f"from your never_share list, so nothing was posted.\n")
+    head = (f"**I held back a reply** to {to} in {where}: it contains one "
+            f"of your never-share phrases, so I didn't post it.\n")
     tail = ("\n**Send anyway** posts it as written; **Discard** drops "
-            "it. Undecided holds are discarded after 24 hours.")
+            "it. If you don't choose within a day, I drop it.")
     body = "> " + "\n".join(parts).replace("\n", "\n> ")
     room = 1990 - len(head) - len(tail)
     if len(body) > room:
@@ -2619,18 +2534,14 @@ def on_hold_button(ix, rest, uid, record):
     at = _holds_live.get(hid)
     if action not in ("send", "discard") or at is None \
             or time.time() - at >= HOLD_TTL_SECS:
-        return ephemeral("That held reply is no longer waiting (already "
-                         "sent or discarded, or it expired after 24 "
-                         "hours).")
+        return ephemeral("That reply is no longer waiting: it was sent or "
+                         "dropped, or a day went by.")
     _holds_live.pop(hid, None)  # one decision per hold
     record({"kind": "hold_choice", "hold": hid, "action": action,
             "by": uid, "at": int(time.time())})
-    line = ("**Send anyway** chosen: posting it now." if action == "send"
-            else "**Discarded**: it will not be posted.")
-    original = (ix.get("message") or {}).get("content") or ""
-    return {"type": 7, "data": {
-        "content": original[:1990 - len(line)] + "\n\n" + line,
-        "components": [], "allowed_mentions": {"parse": []}}}
+    return closed_card(ix, "**Send anyway** chosen: posting it now."
+                       if action == "send"
+                       else "**Discarded**: it will not be posted.")
 
 
 register_interaction("mdhold", on_hold_button)
@@ -2754,7 +2665,7 @@ _ADMIN_LOCK = threading.Lock()
 
 class SettingsCtx:
     """What settings_ui.handle gets: safe to use from the interaction
-    thread. write/reset/undo raise muse_settings.SettingsError for an
+    thread. write/undo raise muse_settings.SettingsError for an
     invalid key, value or scope."""
 
     def __init__(self):
@@ -2778,13 +2689,10 @@ class SettingsCtx:
                     _DIRECTORY["channels"].get(str(guild_id)) or []]
 
     def write(self, key, value, by):
+        """One owner's change (no admin rules: never for anyone else)."""
         with _OVERLAY_LOCK:
-            MS.set_value(_SETTINGS.config_path, key, value, by, PLUGINS_DIR)
-        settings()
-
-    def reset(self, key, by):
-        with _OVERLAY_LOCK:
-            MS.reset(_SETTINGS.config_path, key, by, PLUGINS_DIR)
+            MS.set_value(_SETTINGS.config_path, key, value, by, PLUGINS_DIR,
+                         role="owner")
         settings()
 
     def undo(self, scope_prefix, by, **kw):
@@ -2792,14 +2700,11 @@ class SettingsCtx:
         its group) at one scope (scope_prefix as muse_settings.
         scope_prefix gives it, or a Place); the key reverted, or None.
         kw: children, admin_gid, expect (see muse_settings.undo)."""
-        fn = getattr(MS, "undo", None)
-        if fn is None:
-            raise MS.SettingsError("undo is not available in this version")
         if kw.get("admin_gid"):
             kw.setdefault("info", self)
         with _OVERLAY_LOCK:
-            out = fn(_SETTINGS.config_path, scope_prefix, by, PLUGINS_DIR,
-                     **kw)
+            out = MS.undo(_SETTINGS.config_path, scope_prefix, by,
+                          PLUGINS_DIR, **kw)
         settings()
         return out
 
@@ -2859,7 +2764,7 @@ class SettingsCtx:
         """The newest mention-ledger entries for a place (a Place from
         muse_settings: a server, a channel and its threads, or DMs),
         newest first: message_id, channel_id, guild_id, parent_id,
-        author_id (None in entries older than 2026-10-19), author,
+        author_id (None in old entries), author,
         status, code, detail, reason, at."""
         with _DIRECTORY_LOCK:
             where = dict(_DIRECTORY.get("where") or {})
@@ -2897,16 +2802,8 @@ class SettingsCtx:
 
     def names(self, some_id):
         """A server's or channel's name for muse_settings' sentences."""
-        some_id = str(some_id)
-        with _DIRECTORY_LOCK:
-            for g in _DIRECTORY["guilds"]:
-                if g["id"] == some_id:
-                    return g.get("name")
-            for chans in _DIRECTORY["channels"].values():
-                for c in chans:
-                    if str(c.get("id")) == some_id:
-                        return c.get("name")
-        return settings().labels.get(some_id)
+        return _directory_name(some_id) \
+            or settings().labels.get(str(some_id))
 
     def reload(self):
         """A fresh Settings through the monitor's own watcher, so the
@@ -2931,7 +2828,7 @@ class SettingsCtx:
 
 def _outcome(mid, e, where):
     """One ledger entry for /settings. Its server comes from the entry
-    (recorded since 2026-10-19), else from discovery; an entry is a DM's
+    (old entries have none), else from discovery; an entry is a DM's
     only when it says so or its channel is a known DM channel (an
     unmapped server channel is never shown under DMs)."""
     cid = str(e.get("channel_id") or "")
@@ -2968,8 +2865,8 @@ def _show_value(v):
     return str(v)
 
 
-def _digest_name(some_id):
-    """A server's, channel's or person's name for the digest's words."""
+def _directory_name(some_id):
+    """A server's or channel's name from discovery, else None."""
     some_id = str(some_id)
     with _DIRECTORY_LOCK:
         for g in _DIRECTORY["guilds"]:
@@ -2979,7 +2876,12 @@ def _digest_name(some_id):
             for c in chans:
                 if str(c.get("id")) == some_id:
                     return c.get("name")
-    return _USER_NAMES.get(some_id)
+    return None
+
+
+def _digest_name(some_id):
+    """A server's, channel's or person's name for the digest's words."""
+    return _directory_name(some_id) or _USER_NAMES.get(str(some_id))
 
 
 def _digest_words(c):
@@ -2998,14 +2900,11 @@ def _digest_words(c):
 
 
 def admin_digest_text(gid, changes):
-    with _DIRECTORY_LOCK:
-        known = _DIRECTORY["guilds"]
-    name = next((g["name"] for g in known if g["id"] == gid), None) \
-        or (GUILDS.get(gid) or {}).get("name") or gid
-    head = (f"**Server admin changes in {name}** (server ID {gid}), made "
-            f"with /settings:\n")
-    tail = ("\nAdmins can only make me quieter there. To undo one, run "
-            "/settings there and press Undo, or edit config.yaml.")
+    name = _directory_name(gid) or (GUILDS.get(gid) or {}).get("name") \
+        or gid
+    head = f"**A server admin changed my settings in {name}:**\n"
+    tail = ("\nAdmins can only make me quieter. To undo a change, use "
+            "/settings there and press Undo.")
     lines = []
     for c in changes:
         when = datetime.fromtimestamp(c["at"], timezone.utc) \
@@ -3136,33 +3035,34 @@ _NL_UPKEEP = {"settings": None}
 
 
 def _write_private(path, obj):
-    """Atomic JSON write, mode 600 whatever the file had."""
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".",
-                               prefix="." + os.path.basename(path) + ".",
-                               suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            os.fchmod(f.fileno(), 0o600)
-            json.dump(obj, f)
-        os.replace(tmp, path)
-    except BaseException:
+    """atomic_write, mode 600 whatever the file had."""
+    atomic_write(path, obj, 0o600)
+
+
+def _publish(path, body, cache, check=False, create=True):
+    """Write body to path (mode 600: the wake hook's private files) when
+    it differs from the last write (cache: {"body"}), or (check) the file
+    was lost or mangled. create=False: an empty body never creates the
+    file. False when the write failed (logged)."""
+    if body == cache.get("body") and cache.get("path", path) == path \
+            and not (check and not _private_file_ok(path, body)):
+        return True
+    if create or body or os.path.exists(path):
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+            _write_private(path, body)
+        except OSError as e:
+            print(f"Could not write {os.path.basename(path)}: {e}",
+                  flush=True)
+            return False
+    cache.update(body=body, path=path)
+    return True
 
 
 def nl_journal(put=None, drop=None):
     """nl_journal.json: read it, or add (put=(token, entry)) or remove
     (drop=token) one entry. Any thread."""
     with _NL_JOURNAL_LOCK:
-        try:
-            with open(NL_JOURNAL_FILE) as f:
-                data = json.load(f)
-        except (OSError, ValueError):
-            data = {}
-        data = data if isinstance(data, dict) else {}
+        data = _read_json(NL_JOURNAL_FILE) or {}
         if put is not None:
             data[put[0]] = put[1]
         elif drop is not None and drop in data:
@@ -3186,8 +3086,7 @@ def nl_mint_nonce(state, mid, channel_id=None, fragments=()):
         n[str(mid)]["channel_id"] = str(channel_id)
     if fragments:
         n[str(mid)]["fragments"] = [str(f) for f in fragments]
-    for old in list(n)[:-300]:
-        del n[old]
+    _keep_last(n, 300)
     nl_write_nonces(state)
 
 
@@ -3200,15 +3099,9 @@ def nl_write_nonces(state):
               if not isinstance(v, dict) or now - v.get("at", 0)
               > NL.MAX_AGE]:
         del n[k]
-    body = {k: v["nonce"] for k, v in n.items()}
     owner_items_write(state)   # an owner DM's command uses its nonce
-    if body == _NL_NONCES_WRITTEN["body"]:
-        return
-    try:
-        _write_private(OWNER_DM_NONCES_FILE, body)
-        _NL_NONCES_WRITTEN["body"] = body
-    except OSError as e:
-        print(f"Could not write owner_dm_nonces.json: {e}", flush=True)
+    _publish(OWNER_DM_NONCES_FILE, {k: v["nonce"] for k, v in n.items()},
+             _NL_NONCES_WRITTEN)
 
 
 # ---------------------------------------------------------------------------
@@ -3616,18 +3509,13 @@ def note_owner_item(state, mid, dm=False, channel_id=None, content="",
                    "dm": bool(dm), "channels": ids, "post_channels": post}
     if not dm:
         e[str(mid)]["nonce"] = secrets.token_hex(16)
-    for old in list(e)[:-300]:
-        del e[old]
+    _keep_last(e, 300)
     owner_items_write(state)
 
 
 def _private_file_ok(path, body):
     """The file still holds body (it was not lost or mangled)."""
-    try:
-        with open(path) as f:
-            return json.load(f) == body
-    except (OSError, ValueError):
-        return False
+    return os.path.exists(path) and _read_json(path) == body
 
 
 def owner_items_write(state, check=False):
@@ -3645,14 +3533,7 @@ def owner_items_write(state, check=False):
                          "dm": bool(e.get("dm")),
                          "channels": e.get("channels") or [],
                          "post_channels": e.get("post_channels") or []}
-    if body == _OWNER_ITEMS_WRITTEN["body"] and not (
-            check and not _private_file_ok(OWNER_ITEMS_FILE, body)):
-        return
-    try:
-        _write_private(OWNER_ITEMS_FILE, body)
-        _OWNER_ITEMS_WRITTEN["body"] = body
-    except OSError as e:
-        print(f"Could not write owner_items.json: {e}", flush=True)
+    _publish(OWNER_ITEMS_FILE, body, _OWNER_ITEMS_WRITTEN, check)
 
 
 def owner_items_upkeep(state, queue, now):
@@ -3701,8 +3582,7 @@ def reply_nonce_mint(state, mid):
     if not (isinstance(e, dict) and e.get("nonce")):
         n[str(mid)] = e = {"nonce": secrets.token_hex(16),
                            "at": time.time()}
-        for old in list(n)[:-1000]:
-            del n[old]
+        _keep_last(n, 1000)
     reply_nonces_write(state)
     return e["nonce"]
 
@@ -3711,25 +3591,15 @@ def reply_nonces_write(state, check=False):
     body = {k: v["nonce"] for k, v in (state.get("reply_nonces")
                                        or {}).items()
             if isinstance(v, dict) and v.get("nonce")}
-    if body == _ITEM_NONCES_WRITTEN["body"] and not (
-            check and not _private_file_ok(ITEM_NONCES_FILE, body)):
-        return
-    try:
-        _write_private(ITEM_NONCES_FILE, body)
-        _ITEM_NONCES_WRITTEN["body"] = body
-    except OSError as e:
+    if not _publish(ITEM_NONCES_FILE, body, _ITEM_NONCES_WRITTEN, check):
         # The wake hook cannot hand out nonces it cannot read, so no
         # reply can be sent: say so (not "the prompt is out of date").
-        print(f"Could not write item_nonces.json: {e}", flush=True)
         day = time.strftime("%Y-%m-%d")
         if _ITEM_NONCES_ALERT["day"] != day:
             _ITEM_NONCES_ALERT["day"] = day
-            for uid in sorted(OWNER_USER_IDS):
-                dm_owner(uid, {"content": (
-                    "I can't write item_nonces.json in my folder, so I "
-                    "can't send replies. Check the disk space and the "
-                    "folder's permissions; monitor.log has the error."),
-                    "allowed_mentions": {"parse": []}})
+            notify_owners("I can't save files in my folder, so I can't "
+                          "send replies right now. The disk may be full, "
+                          "or the folder's permissions changed.")
 
 
 def reply_nonces_upkeep(state, queued, now):
@@ -3879,18 +3749,12 @@ def nl_outbox_item(state, item):
                          nonce=send_nonce(cid, rt, [rec["text"]], 0),
                          components=rec.get("components"))
     except Exception as e:
-        now = time.time()
-        first = retry.get("first", now)
-        if getattr(e, "code", None) == 403 or now - first >= SEND_RETRY_SECS:
+        if isinstance(e, SecretBlocked) or getattr(e, "code", None) == 403 \
+                or not _retry_later(item, retry, e):
             print(f"Giving up on the settings reply for item "
                   f"{item.get('item')}: {e}", flush=True)
             _settle(state, item, "skipped", f"send failed: {e}"[:200])
             return "settled"
-        n = retry.get("n", 0) + 1
-        item["_retry"] = {"first": first, "n": n,
-                          "next": now + min(30, 2 ** n)}
-        print(f"Failed to send the settings reply (attempt {n}; retrying, "
-              f"same nonce): {e}", flush=True)
         return "retry"
     NL.sent(state, item["item"], (msg or {}).get("id"))
     _settle(state, item, rec["status"], rec["reason"], replied=True)
@@ -3956,14 +3820,7 @@ def nl_upkeep(state):
     if due is None:
         return
     text, components, groups = due
-    payload = {"content": text, "allowed_mentions": {"parse": []},
-               "flags": NL.SUPPRESS_NOTIFICATIONS}
-    if components:
-        payload["components"] = components
-    delivered = not OWNER_USER_IDS
-    for uid in sorted(OWNER_USER_IDS):
-        if dm_owner(uid, payload):
-            delivered = True
+    delivered = notify_owners(text, components, NL.SUPPRESS_NOTIFICATIONS)
     dropped = NL.notice_done(state, delivered)
     for g in groups:
         print(f"Settings (CLI, by {g['by']}): applied "
@@ -3980,18 +3837,6 @@ def nl_upkeep(state):
 _APP_ID = {"id": None}
 _COMMAND_REG = {"done": False, "next_try": 0.0, "last_error": None}
 COMMAND_RETRY_SECS = 60
-
-
-def api_patch(path, data):
-    data = guard_outgoing(data, path)
-    body = json.dumps(data).encode()
-    req = urllib.request.Request(API + path, data=body, headers=headers(),
-                                 method="PATCH")
-
-    def _do():
-        with urllib.request.urlopen(req, timeout=20) as r:
-            return json.load(r)
-    return _api_call(_do)
 
 
 def _command_differs(have, want):
@@ -4089,7 +3934,7 @@ def is_mention(msg):
     text containing the bot's name is NOT a mention: in a server whose
     topic shares the bot's name, that made every casual "my muse ..." a
     summons. Whether a bot author may trigger is trigger_kind's call."""
-    author = msg.get("author", {}) or {}
+    author = _who(msg)
     if author.get("id") == BOT_ID:
         return False
     return any(m.get("id") == BOT_ID for m in msg.get("mentions", []))
@@ -4118,7 +3963,7 @@ def trigger_verdict(msg, guild_id=None, state=None):
     """trigger_kind plus why: (kind, refusal). refusal is set only when
     the message addresses the bot directly (addresses_bot) and the
     settings of its scope decline it; ordinary chatter gets None."""
-    author = msg.get("author", {}) or {}
+    author = _who(msg)
     if author.get("id") == BOT_ID:
         return None, None
     gid = guild_id or msg.get("guild_id") \
@@ -4154,7 +3999,7 @@ def note_refused(msg, cname, reason):
     judges by the settings in force when it runs) never answers it
     later, after a setting is relaxed. A deliberately ignored message
     stays ignored. Ordinary chatter is never ledgered."""
-    author = msg.get("author", {}) or {}
+    author = _who(msg)
     ledger_record(msg["id"], "skipped", f"settings: {reason}",
                   channel_id=msg.get("channel_id"),
                   author=author.get("username"), author_id=author.get("id"))
@@ -4171,7 +4016,7 @@ def is_reply_to_bot(msg):
     rm = msg.get("referenced_message")
     if not rm:
         return False
-    return (rm.get("author", {}) or {}).get("id") == BOT_ID
+    return _who(rm).get("id") == BOT_ID
 
 
 def get_reply_context(msg):
@@ -4192,7 +4037,7 @@ def get_reply_context(msg):
             return None
     if not rm:
         return None
-    author = rm.get("author", {}) or {}
+    author = _who(rm)
     return {
         "author": author.get("username", "?"),
         "author_id": author.get("id"),
@@ -4205,13 +4050,12 @@ def hold_fragment(state, channel_id, msg):
     """If (channel, author) already has a burst being coalesced, append this
     message to it as a fragment and return True (caller must not classify it
     independently). The trigger message itself is never a fragment."""
-    author_id = (msg.get("author", {}) or {}).get("id")
+    author_id = _who(msg).get("id")
     key = f"{channel_id}:{author_id}"
     entry = state.get("pending", {}).get(key)
     if entry and msg["id"] != entry["first_id"]:
         entry["fragments"].append(msg)
-        print(f"Holding fragment from "
-              f"{(msg.get('author', {}) or {}).get('username')} in "
+        print(f"Holding fragment from {_who(msg).get('username')} in "
               f"{entry['channel_name']} for one coalesced reply.",
               flush=True)
         return True
@@ -4224,7 +4068,7 @@ def stage_trigger(state, msg, cname, guild_id, kind, dm=False):
     within COALESCE_SECS fold into the same burst; flush_pending() turns
     each matured burst into a single queue item. A second trigger from the
     same author while a burst is open becomes a fragment of it."""
-    author_id = (msg.get("author", {}) or {}).get("id")
+    author_id = _who(msg).get("id")
     key = f"{msg['channel_id']}:{author_id}"
     pending = state.setdefault("pending", {})
     if key in pending:
@@ -4235,9 +4079,8 @@ def stage_trigger(state, msg, cname, guild_id, kind, dm=False):
         if kind == "mention" and entry.get("kind") == "follow_up":
             entry["kind"] = "mention"  # direct address beats a follow-up
         entry["fragments"].append(msg)
-        print(f"Additional trigger from "
-              f"{(msg.get('author', {}) or {}).get('username')} folded into "
-              f"pending burst in {cname}.", flush=True)
+        print(f"Additional trigger from {_who(msg).get('username')} "
+              f"folded into pending burst in {cname}.", flush=True)
         return
     pending[key] = {
         "first_id": msg["id"],
@@ -4254,7 +4097,7 @@ def stage_trigger(state, msg, cname, guild_id, kind, dm=False):
         "fragments": [],
     }
     note_ingested(state, msg["id"])
-    print(f"Staged {kind} from {(msg.get('author', {}) or {}).get('username')} "
+    print(f"Staged {kind} from {_who(msg).get('username')} "
           f"in {cname} for coalescing.", flush=True)
 
 
@@ -4283,8 +4126,7 @@ def alias_fragments(state, trigger_id, fragments):
     aliases = state.setdefault("reply_aliases", {})
     for f in fragments:
         aliases[f["id"]] = trigger_id
-    for mid in list(aliases)[:-500]:
-        del aliases[mid]
+    _keep_last(aliases, 500)
 # ---------------------------------------------------------------------------
 # Early burst flush. The coalesce window (behavior.coalesce_seconds, or
 # BOT_COALESCE_SECS for bot authors) is the MAXIMUM wait. With the
@@ -4387,17 +4229,23 @@ def flush_pending(state, queue, force=False):
         if force or early or now - entry["first_seen"] >= entry.get(
                 "window", COALESCE_SECS):
             trigger = entry["trigger"]
-            ok = enqueue_message(trigger, entry["channel_name"], state,
-                                 queue, dm=entry["kind"] == "dm",
-                                 fragments=entry["fragments"],
-                                 guild_id=entry["guild_id"],
-                                 follow_up=entry["kind"] == "follow_up")
+            who = _who(trigger).get("username")
+            try:
+                ok = enqueue_message(trigger, entry["channel_name"], state,
+                                     queue, dm=entry["kind"] == "dm",
+                                     fragments=entry["fragments"],
+                                     guild_id=entry["guild_id"],
+                                     follow_up=entry["kind"] == "follow_up")
+            except Exception as e:
+                # One poison burst must not hold back every other one:
+                # it is retried (then ledgered) like a failed enqueue.
+                print(f"Enqueue error: {type(e).__name__}: {e}", flush=True)
+                ok = False
             n_frag = len(entry["fragments"])
             why = " (author stopped typing)" if early and not force else ""
-            print(f"Flushed {entry['kind']} burst "
-                  f"({1 + n_frag} message(s)) from "
-                  f"{(trigger.get('author', {}) or {}).get('username')} in "
-                  f"{entry['channel_name']}: queued={ok}{why}", flush=True)
+            print(f"Flushed {entry['kind']} burst ({1 + n_frag} message(s)) "
+                  f"from {who} in {entry['channel_name']}: queued={ok}{why}",
+                  flush=True)
             if ok:
                 del pending[key]
                 flushed = True
@@ -4420,16 +4268,11 @@ def flush_pending(state, queue, force=False):
                     ledger_record_many(
                         [trigger["id"]]
                         + [f["id"] for f in entry["fragments"]],
-                        "skipped",
-                        f"enqueue failed {entry['tries']}x",
-                        channel_id=entry["channel_id"],
-                        author=(trigger.get('author', {}) or {})
-                        .get('username'),
-                        author_id=(trigger.get('author', {}) or {})
-                        .get('id'))
-                    print(f"Dropping burst from "
-                          f"{(trigger.get('author', {}) or {}).get('username')} "
-                          f"in {entry['channel_name']} after 3 failed "
+                        "skipped", f"enqueue failed {entry['tries']}x",
+                        channel_id=entry["channel_id"], author=who,
+                        author_id=_who(trigger).get("id"))
+                    print(f"Dropping burst from {who} in "
+                          f"{entry['channel_name']} after 3 failed "
                           f"enqueues (recorded in mention ledger).",
                           flush=True)
                     del pending[key]
@@ -4510,12 +4353,10 @@ def send_typing(channel_id):
 
 
 # ---------------------------------------------------------------------------
-# Typing indicator. Discord shows one typing ping for ~10s. The main loop
-# used to re-send it every 8s itself, but one iteration can take much
-# longer (a full REST poll, the sweep, discovery, media downloads, a
-# multi-part send), so the indicator kept lapsing and users saw it
-# flicker until the reply arrived. A daemon thread now pings every
-# active channel on its own clock. The main loop only says which
+# Typing indicator. Discord shows one typing ping for ~10s, and one main
+# loop iteration can take longer (media downloads, a multi-part send),
+# so a daemon thread pings every active channel on its own clock and
+# the indicator never lapses. The main loop only says which
 # channels are active (typing_refresh): a channel types while it has a
 # pending burst (not in enqueue back-off) or a queue item, for at most
 # TYPING_MAX_SECS per burst or item so a dead worker does not type
@@ -4551,8 +4392,9 @@ def typing_clear(keys, sent_in=None):
             _typing_last.pop(sent_in, None)
 
 
-def typing_refresh(state):
-    """Publish the channels that are waiting on a reply (see above)."""
+def typing_refresh(state, queue=None):
+    """Publish the channels that are waiting on a reply (see above).
+    queue: this tick's queue, when the caller has read it already."""
     now = time.time()
     bursts = {}
     for key, entry in state.get("pending", {}).items():
@@ -4564,7 +4406,7 @@ def typing_refresh(state):
                                       entry.get("first_seen", now))
     typing_sync("burst:", bursts)
     items = {}
-    for item in load_queue():
+    for item in load_queue() if queue is None else queue:
         if not isinstance(item, dict) or not item.get("channel_id") \
                 or not item.get("message_id"):
             continue
@@ -4630,8 +4472,8 @@ def normalize_parts(item):
 
     The worker drafts long replies as "parts" (2-4 short messages, like a
     person thinking aloud) instead of one "text" blob. Short replies stay a
-    single-element list. Enforces the part cap and the configured total budget
-    (behavior.max_reply_chars).
+    single-element list. Enforces the part cap and max_reply_chars as the
+    budget of all parts together (the later ones are cut first).
     """
     raw = item.get("parts")
     clean = ([p for p in raw if isinstance(p, str) and p.strip()]
@@ -4644,13 +4486,13 @@ def normalize_parts(item):
             parts[-1] = sanitize_reply((parts[-1] + " " + rest).strip())
     else:
         parts = [sanitize_reply(item.get("text", ""))]
-    parts = [p for p in parts if p]
-    total = sum(len(p) for p in parts)
-    if total > MAX_REPLY_CHARS:
-        overflow = total - MAX_REPLY_CHARS
-        parts[-1] = parts[-1][:max(0, len(parts[-1]) - overflow)].rstrip()
-        parts = [p for p in parts if p]
-    return parts
+    out, left = [], MAX_REPLY_CHARS
+    for p in parts:
+        p = p[:left].rstrip()
+        if p:
+            out.append(p)
+            left -= len(p)
+    return out
 
 
 def send_fragmented(channel_id, parts, reply_to=None, attachments=(),
@@ -4712,6 +4554,13 @@ def send_reply_with_files(channel_id, text, files, reply_to=None,
     boundary = "----MuseDiscord%d" % int(time.time() * 1000)
     guard_outgoing({"content": text,
                     "files": [fname for _, fname in files]}, channel_id)
+    blobs = []
+    for path, _ in files:
+        with open(path, "rb") as f:
+            blobs.append(f.read())
+    # And what the files hold: a worker can write a secret into one.
+    guard_outgoing({"files": [b.decode("latin-1") for b in blobs]},
+                   channel_id)
     payload = {"content": text,
                "allowed_mentions": mentions or SEND_ALLOWED_MENTIONS}
     if reply_to:
@@ -4723,11 +4572,9 @@ def send_reply_with_files(channel_id, text, files, reply_to=None,
     body += (f'--{boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\n'
              f'Content-Type: application/json\r\n\r\n').encode()
     body += json.dumps(payload).encode() + b"\r\n"
-    for i, (path, fname) in enumerate(files):
+    for i, ((_, fname), data) in enumerate(zip(files, blobs)):
         ext = os.path.splitext(fname)[1].lower()
         ctype = ATTACH_CTYPES.get(ext, "application/octet-stream")
-        with open(path, "rb") as f:
-            data = f.read()
         body += (f'--{boundary}\r\nContent-Disposition: form-data; '
                  f'name="files[{i}]"; filename="{fname}"\r\n'
                  f'Content-Type: {ctype}\r\n\r\n').encode()
@@ -5079,47 +4926,22 @@ def _fetch_complete(url, max_bytes, timeout, kind):
     return bytes(data), ctype
 
 
-def download_media(url, dest_path):
-    """Download a media URL to dest_path. Returns the content_type if it is
-    an image within the size cap, else None (partial files are removed)."""
+# kind -> (size cap, timeout, the content type it must have: "" = any).
+DOWNLOADS = {"image": (MAX_MEDIA_BYTES, 20, "image/"),
+             "video": (MAX_VIDEO_BYTES, 60, "video/"),
+             "document": (MAX_DOC_BYTES, 20, "")}
+
+
+def download(kind, url, dest_path):
+    """Download a complete file of this kind to dest_path; its content
+    type (a document's may be anything), or None (nothing written)."""
+    cap, timeout, want = DOWNLOADS[kind]
     try:
-        data, ctype = _fetch_complete(url, MAX_MEDIA_BYTES, 20, "image")
+        data, ctype = _fetch_complete(url, cap, timeout, kind)
     except Exception as e:
-        print("Media download failed: %s" % e, flush=True)
+        print(f"{kind.capitalize()} download failed: {e}", flush=True)
         return None
-    if not data or not ctype.startswith("image/"):
-        return None
-    with open(dest_path, "wb") as f:
-        f.write(data)
-    return ctype
-
-
-def download_video(url, dest_path):
-    """Download a video URL to dest_path. Returns content_type if video/* and
-    within the size cap, else None (partial files are removed)."""
-    try:
-        data, ctype = _fetch_complete(url, MAX_VIDEO_BYTES, 60, "video")
-    except Exception as e:
-        print("Video download failed: %s" % e, flush=True)
-        return None
-    if not data or not ctype.startswith("video/"):
-        return None
-    with open(dest_path, "wb") as f:
-        f.write(data)
-    return ctype
-
-
-def download_document(url, dest_path):
-    """Download a document URL to dest_path. Returns the content_type if the
-    download completed within the size cap, else None (partial files are
-    removed). Content type is not filtered here; the caller decides what to
-    extract based on type/extension."""
-    try:
-        data, ctype = _fetch_complete(url, MAX_DOC_BYTES, 20, "document")
-    except Exception as e:
-        print("Document download failed: %s" % e, flush=True)
-        return None
-    if not data:
+    if not data or not ctype.startswith(want):
         return None
     with open(dest_path, "wb") as f:
         f.write(data)
@@ -5281,14 +5103,8 @@ def collect_media(msg):
     (truncated); unviewable lists skipped files so the worker can be honest
     about limits."""
     os.makedirs(MEDIA_DIR, exist_ok=True)
-    media = []
-    documents = []
-    unviewable = []
-    candidates = []
-
-    video_candidates = []
-    doc_candidates = []
-
+    media, documents, unviewable = [], [], []
+    candidates, video_candidates, doc_candidates = [], [], []
     for att in msg.get("attachments", []):
         url = att.get("url")
         if not url:
@@ -5330,7 +5146,7 @@ def collect_media(msg):
             break
         vdest = os.path.join(MEDIA_DIR, "%s_%d.vid" % (msg["id"], len(media)))
         try:
-            ctype = download_video(url, vdest)
+            ctype = download("video", url, vdest)
         except Exception as e:
             print("Video download failed (%s): %s" % (name, e), flush=True)
             continue
@@ -5357,7 +5173,7 @@ def collect_media(msg):
         dest = os.path.join(MEDIA_DIR, "%s_%d.doc" % (msg["id"],
                                                       len(documents)))
         try:
-            got_ctype = download_document(url, dest)
+            got_ctype = download("document", url, dest)
         except Exception as e:
             print("Document download failed (%s): %s" % (name, e),
                   flush=True)
@@ -5392,7 +5208,7 @@ def collect_media(msg):
             seen.add(u)
             dest = os.path.join(MEDIA_DIR, "%s_%d.img" % (msg["id"], len(media)))
             try:
-                ctype = download_media(u, dest)
+                ctype = download("image", u, dest)
             except Exception as e:
                 print("Media download failed (%s): %s" % (label, e), flush=True)
                 continue
@@ -5428,7 +5244,7 @@ def record_history(state, channel_id, messages):
     for m in sorted(messages, key=lambda x: int(x["id"])):
         if m["id"] in seen_ids:
             continue
-        author = m.get("author", {}) or {}
+        author = _who(m)
         text = (m.get("content") or "")[:HISTORY_TEXT_CHARS]
         if not text and not (m.get("attachments") or m.get("embeds")):
             continue
@@ -5460,11 +5276,10 @@ def record_history(state, channel_id, messages):
 # ---------------------------------------------------------------------------
 # REST watermark vs gateway dedupe. state["last_seen"][cid] is the REST
 # poll's watermark and only the poll advances it (or seeding, the first
-# time a channel is seen). The gateway used to advance it too, so after a
-# session that could not be resumed lost events, the first message past
-# the gap moved the watermark beyond the missed ones and the poll never
-# read them. Now messages the gateway handled above the watermark are
-# remembered in state["gw_seen"][cid], the poll skips those, and both
+# time a channel is seen): if the gateway advanced it, the first message
+# after a gap of lost events would move it past the missed ones. Messages
+# the gateway handled above the watermark are remembered in
+# state["gw_seen"][cid] instead, the poll skips those, and both
 # paths skip anything at or below the watermark: every message is
 # processed once, by whichever path sees it first.
 # ---------------------------------------------------------------------------
@@ -5575,7 +5390,7 @@ def classify_message(state, msg, channel_name, guild_id=None):
         # thread", ...) carry the acting user as author: never a
         # trigger, a follow-up or a fragment.
         return None
-    author = msg.get("author", {}) or {}
+    author = _who(msg)
     if author.get("id") == BOT_ID:
         return None  # the bot's own messages: never triggers or fragments
     watch_scan(msg, guild_id)  # Discord watches (cheap; never raises)
@@ -5705,7 +5520,7 @@ def note_dm_refused(msg):
     or a who.dms_from-listed person's is ledgered (see note_refused): the
     sweep covers only their DM channels, and a stranger's DMs stay
     unrecorded."""
-    author = msg.get("author", {}) or {}
+    author = _who(msg)
     if dm_swept_author(author.get("id")) and not is_bot_author(author):
         note_refused(msg, "DM with " + (author.get("username") or "?"),
                      dm_refusal(author) or "who.replies is off for DMs")
@@ -5740,7 +5555,7 @@ def conversation_participants(history, msg, reply_ctx):
             p["you"] = True
         people[pid] = p
 
-    author = msg.get("author", {}) or {}
+    author = _who(msg)
     add(author.get("id"), author.get("username"), is_bot_author(author),
         (msg.get("member") or {}).get("nick") or author.get("global_name"))
     for h in reversed(history):
@@ -5839,8 +5654,7 @@ def note_item_meta(state, mid, **meta):
     m = state.setdefault("item_meta", {})
     m[mid] = meta
     PRO.note_item(mid, meta)  # who talked to the bot (proactive.py)
-    for old in list(m)[:-300]:
-        del m[old]
+    _keep_last(m, 300)
 
 
 def enqueue_message(msg, cname, state, queue, dm=False, fragments=None,
@@ -5911,11 +5725,9 @@ def enqueue_message(msg, cname, state, queue, dm=False, fragments=None,
             hold_suspicious(matched)
             return False
 
-    # 2. Rate limits (also bound token spend). One charge per burst, not
-    #    per fragment.
-    #    A capped burst is dropped at once, not retried: ledgered as
-    #    skipped (terminal), so flush_pending drops its pending entry
-    #    and the author's later messages are judged on their own.
+    # 2. Rate limits (also bound token spend), one charge per burst. A
+    #    capped burst is ledgered as skipped (terminal), so flush_pending
+    #    drops it and the author's later messages are judged on their own.
     capped = rate_block(state, author_id, msg["channel_id"], scope)
     if capped:
         ledger_record_many(burst_ids, "skipped", "daily cap reached",
@@ -5925,9 +5737,7 @@ def enqueue_message(msg, cname, state, queue, dm=False, fragments=None,
         return False
     rate_record(state, author_id, scope)
 
-    # 3. Download viewable media so the worker can see it, and extract
-    #    document text so the worker can read attachments (trigger + every
-    #    fragment).
+    # 3. Media and document text, for the worker to see and read.
     media, documents, unviewable = [], [], []
     for m in [msg] + fragments:
         md, dc, uv = collect_media(m)
@@ -5935,9 +5745,7 @@ def enqueue_message(msg, cname, state, queue, dm=False, fragments=None,
         documents += dc
         unviewable += uv
 
-    # 3b. Reply context: when the trigger used Discord's reply feature, say
-    #     whose message it was replying to so the worker knows whether the
-    #     message was actually addressed to the bot or to someone else.
+    # 3b. Whose message the trigger replies to, if anyone's.
     reply_ctx = get_reply_context(msg)
 
     # 3c. The worker reads extracted document text and the replied-to
@@ -5957,20 +5765,16 @@ def enqueue_message(msg, cname, state, queue, dm=False, fragments=None,
                 hold_suspicious(f"{matched} (in {where})")
                 return False
 
-    # 4. Attach recent conversation history (excluding the trigger and its
-    #    fragments) so the worker replies with context.
+    # 4. Recent history, without the burst itself.
     history = [h for h in chan_hist
                if h["id"] not in burst_ids][-HISTORY_ATTACHED:]
 
     # 5. Generation permission (media.*) and plugin gates. may_generate
-    #    is PERMISSION, not a decision: the worker still judges from the
-    #    full conversation context whether generation is actually wanted,
-    #    and generates at most once per queue item. Queue time only
-    #    records the permission, plus the single-use approval below
-    #    (keyed by message id, because the worker's outbox item does not
-    #    carry the flag); it must not claim anywhere that generation is
-    #    starting. Plugins may annotate the item via the gate_message
-    #    hook, but never grant may_generate.
+    #    is permission, not a decision: the worker judges whether
+    #    generation is wanted. Queue time records it, plus the single-use
+    #    approval below (keyed by message id: the worker's outbox item
+    #    does not carry the flag). Plugins may annotate the item
+    #    (gate_message), but never grant may_generate.
     def author_matches(who):
         return people_match(who, author_id, lambda: (
             set((msg.get("member") or {}).get("roles") or [])
@@ -5991,9 +5795,8 @@ def enqueue_message(msg, cname, state, queue, dm=False, fragments=None,
         state.setdefault("gen_approved", {})[msg["id"]] = {
             "ts": time.time(), "channel_id": msg["channel_id"]}
 
-    # 6. Owner commands: stamped for the owners' messages only, from the
-    #    verified user ID in code. The worker decides with natural-language
-    #    understanding whether the message asks the bot to DO something.
+    # 6. Owner commands: stamped from the verified author id only; the
+    #    worker decides whether the message asks the bot to do something.
     owner_command = author_id in OWNER_USER_IDS \
         and bool(here["abilities.owner_commands"])
     # The worker replies under the LAST fragment, but the ledger and the
@@ -6094,8 +5897,7 @@ def note_ingested(state, mid):
     split."""
     seen = state.setdefault("ingested_at", {})
     seen.setdefault(mid, time.time())
-    for old in list(seen)[:-200]:
-        del seen[old]
+    _keep_last(seen, 200)
 
 
 def note_queued(state, mid):
@@ -6104,8 +5906,7 @@ def note_queued(state, mid):
     now = time.time()
     queued = state.setdefault("queued_at", {})
     queued[mid] = now
-    for old in list(queued)[:-200]:
-        del queued[old]
+    _keep_last(queued, 200)
     return now
 
 
@@ -6151,9 +5952,8 @@ def _answered_id(state, item):
 
 def _outbox_problem(item):
     """Why an outbox item cannot be processed, or None. Ids given as
-    numbers are normalized to strings in place. A wrong type used to
-    raise out of process_outbox before its final write, which blocked the
-    outbox and re-sent the earlier items with no reply_to every cycle."""
+    numbers are normalized to strings in place. Checked first, so a
+    wrong type never raises out of process_outbox mid-pass."""
     if not isinstance(item, dict):
         return "not a JSON object"
     for field in ("channel_id", "reply_to", "item"):
@@ -6254,12 +6054,7 @@ def _scrub_nonces(value):
 
 def _reject_outbox(rejects):
     """Set malformed outbox items aside for the owner's review."""
-    try:
-        with open(OUTBOX_REJECTED_FILE) as f:
-            kept = json.load(f)
-        kept = kept if isinstance(kept, list) else []
-    except (OSError, ValueError):
-        kept = []
+    kept = _read_json(OUTBOX_REJECTED_FILE, list) or []
     now = datetime.now(timezone.utc).isoformat()
     kept += [{"rejected_at": now, "reason": reason,
               "item": _scrub_nonces(item)} for item, reason in rejects]
@@ -6305,6 +6100,25 @@ SEND_RETRY_SECS = 90
 # place, so no reply would ever go out again. outbox_pass counts the
 # failures per item and sets one aside after OUTBOX_POISON_TRIES.
 OUTBOX_POISON_TRIES = 3
+
+
+def _retry_later(item, retry, exc, **keep):
+    """After a failed send: schedule the next try in item["_retry"]
+    (growing gaps; keep: more fields to carry) and say True, or False
+    once SEND_RETRY_SECS have passed since the first failure. The send
+    may well have landed (a timeout after Discord created the message
+    looks exactly like a failure), so it stops before the nonce window
+    closes rather than risk a duplicate."""
+    now = time.time()
+    first = retry.get("first", now)
+    if now - first >= SEND_RETRY_SECS:
+        return False
+    n = retry.get("n", 0) + 1
+    item["_retry"] = dict(keep, first=first, n=n,
+                          next=now + min(30, 2 ** n))
+    print(f"Send failed (attempt {n}; retrying, same nonce): {exc}",
+          flush=True)
+    return True
 _OUTBOX_CURRENT = {"key": None}
 _OUTBOX_POISON = {}
 
@@ -6354,10 +6168,18 @@ def _set_aside_poison(key, exc):
         _reject_outbox([(redact_nonces(i), why) for i in gone[:1]])
 
 
+def _refuse(rejects, item, why, note=""):
+    """Log a refused outbox item and set it aside (nonces blanked)."""
+    where = item.get("channel_name") if isinstance(item, dict) else None
+    print(f"Refused outbox item for {where or '?'}: {why}{note} (set aside "
+          f"in {os.path.basename(OUTBOX_REJECTED_FILE)})", flush=True)
+    rejects.append((redact_nonces(item), why))
+
+
 def bind_started(state, item, settled, remaining, rejects):
     """The one binding step for outbox items that answer an item the
-    monitor started, run before owner_dm_gate (PROTOCOL.md, "Items the
-    monitor starts"): a reminder or watch fire (watch_bind: its
+    monitor started, run before owner_dm_gate (PROTOCOL.md, "Fires: the
+    monitor starts a queue item"): a reminder or watch fire (watch_bind: its
     requester, its place) or a heartbeat slot (proactive.py: its
     targets, nonce and caps; sent there, never by the path below).
     Returns (fire, handled): handled means the item was settled, set
@@ -6371,11 +6193,7 @@ def bind_started(state, item, settled, remaining, rejects):
         settled.append({"item": fire["gone"]})
         return None, True
     if isinstance(fire, str):
-        print(f"Refused outbox item for "
-              f"{item.get('channel_name') or '?'}: {fire} (set aside "
-              f"in {os.path.basename(OUTBOX_REJECTED_FILE)})",
-              flush=True)
-        rejects.append((redact_nonces(item), fire))
+        _refuse(rejects, item, fire)
         return None, True
     if fire is not None:
         return fire, False
@@ -6386,17 +6204,13 @@ def bind_started(state, item, settled, remaining, rejects):
         pro = None
         if could_name_slot(item):
             # Never left to the ordinary path: set aside.
-            why = "proactive: its slot could not be checked"
-            print(f"Refused outbox item: {why} (set aside in "
-                  f"{os.path.basename(OUTBOX_REJECTED_FILE)})", flush=True)
-            rejects.append((redact_nonces(item), why))
+            _refuse(rejects, item,
+                    "proactive: its slot could not be checked")
             return None, True
     if pro is None:
         return None, False
     if pro.reject:
-        print(f"Refused outbox item: {pro.reject} (set aside in "
-              f"{os.path.basename(OUTBOX_REJECTED_FILE)})", flush=True)
-        rejects.append((redact_nonces(item), pro.reject))
+        _refuse(rejects, item, pro.reject)
     if pro.retry:
         remaining.append(item)
     if pro.spent:
@@ -6439,9 +6253,9 @@ MISSING_REPLY_NONCE = "no reply_nonce (an outdated worker prompt?)"
 STALE_PROMPT_FILE = os.path.join(BASE_DIR, "prompt_outdated.json")
 STALE_PROMPT_HITS = 3
 STALE_PROMPT_WINDOW = 3600
-STALE_PROMPT_DM = ("Your Muse's worker prompt is out of date, so I can't "
-                   "send replies. Ask your Muse: 'Update muse-discord by "
-                   "following UPDATING.md' (it re-renders the prompt).")
+STALE_PROMPT_DM = ("My instructions for writing replies are out of date, "
+                   "so I can't send replies. Ask your Muse to update "
+                   "muse-discord; that refreshes them.")
 
 
 def note_reply_nonce(state, refusal):
@@ -6476,9 +6290,7 @@ def note_reply_nonce(state, refusal):
     day = time.strftime("%Y-%m-%d")
     if state.get("stale_prompt_alert") != day:
         state["stale_prompt_alert"] = day
-        for uid in sorted(OWNER_USER_IDS):
-            dm_owner(uid, {"content": STALE_PROMPT_DM,
-                           "allowed_mentions": {"parse": []}})
+        notify_owners(STALE_PROMPT_DM)
 
 
 def bound_elsewhere(state, item):
@@ -6544,6 +6356,59 @@ def own_channel_problem(state, item, index):
     return None
 
 
+def _reply_attachments(state, item, retry):
+    """(gen_id, approval, attachments, gen_files) for a reply: only
+    generated files bound to the queue item it answers
+    (generated/<its message_id>/), under the monitor's live may_generate
+    approval for that item (gen_approved; the outbox item does not carry
+    the flag), and only into the channel the item came from. No approval,
+    no files: generation is gated in code. attachments are (send path,
+    filename) for the send; gen_files [send path, original] pairs, kept
+    in _retry so a retry re-attaches the same files."""
+    gen_id = _gen_item_id(state, item)
+    approval = _gen_approval(state, gen_id)
+    if approval and approval.get("channel_id") != item.get("channel_id"):
+        print(f"Note: generation approval for item {gen_id} belongs to "
+              f"channel {approval.get('channel_id')}, not "
+              f"{item.get('channel_id')}; no attachments", flush=True)
+        approval = None
+    attachments, gen_files = [], []
+    if approval and "attachments" in retry:
+        # A retry: the files the first attempt resolved. Re-checked,
+        # because the outbox (and so _retry) is worker-writable.
+        for pair in retry.get("attachments") or []:
+            if isinstance(pair, list) and len(pair) == 2 \
+                    and len(_validate_gen_paths(pair, gen_id)) == 2:
+                attachments.append((pair[0], os.path.basename(pair[0])))
+                gen_files.append(pair)
+    elif approval:
+        candidates = _validate_gen_paths(item.get("attachments"), gen_id)
+        if not candidates:
+            # The media tool usually returns a remote URL or handle, not
+            # the local filename, so the worker can't name the file.
+            found = _discover_generated(state, gen_id)
+            if found:
+                print(f"Attaching discovered generated file: {found}",
+                      flush=True)
+                candidates.append(found)
+            else:
+                print(f"Note: approved generation for {gen_id} but no "
+                      f"file in generated/{gen_id}/", flush=True)
+        for rp in candidates:
+            send_path, fname = fit_for_discord(rp)
+            if send_path:
+                attachments.append((send_path, fname))
+                gen_files.append([send_path, rp])
+            else:
+                print(f"Attachment too large even compressed: {rp}",
+                      flush=True)
+    elif item.get("attachments"):
+        print(f"Note: reply to {item.get('reply_to')} listed attachments "
+              f"without a live generation approval for its item; dropped",
+              flush=True)
+    return gen_id, approval, attachments, gen_files
+
+
 def process_outbox(state):
     """Send replies drafted by the worker, with output guardrails + dedup.
 
@@ -6555,13 +6420,8 @@ def process_outbox(state):
     appended meanwhile: writing back the copy read before the sends
     deleted those appends. Settled items (sent, silent, or skipped) also
     leave the queue here, so the worker never has to rewrite it."""
-    try:
-        with open(OUTBOX_FILE) as f:
-            idle = json.load(f) == []
-    except FileNotFoundError:
-        idle = True
-    except (OSError, ValueError):
-        idle = False  # unreadable: _outbox_load sets it aside
+    # (An unreadable outbox is not idle: _outbox_load sets it aside.)
+    idle = _read_json(OUTBOX_FILE, list) == []
     if idle and not os.path.exists(OUTBOX_PROCESSING_FILE) \
             and not state.get("released"):
         return
@@ -6585,12 +6445,7 @@ def process_outbox(state):
         _OUTBOX_CURRENT["key"] = _outbox_key(item)  # see outbox_pass
         problem = _outbox_problem(item)
         if problem:
-            where = item.get("channel_name") if isinstance(item, dict) \
-                else None
-            print(f"Rejected outbox item for {where or '?'}: {problem} "
-                  f"(set aside in "
-                  f"{os.path.basename(OUTBOX_REJECTED_FILE)})", flush=True)
-            rejects.append((redact_nonces(item), problem))
+            _refuse(rejects, item, problem)
             continue
         # Items the monitor started (reminder and watch fires, heartbeat
         # slots): bound to their own record before anything else looks
@@ -6603,10 +6458,7 @@ def process_outbox(state):
         # only the owner-DM-only wake holding the DM's nonce may touch it.
         refused = owner_dm_gate(state, item, index)
         if refused:
-            print(f"Refused outbox item for {item.get('channel_name') or '?'}"
-                  f": {refused}; the owner DM stays open (set aside in "
-                  f"{os.path.basename(OUTBOX_REJECTED_FILE)})", flush=True)
-            rejects.append((redact_nonces(item), refused))
+            _refuse(rejects, item, refused, "; the owner DM stays open")
             continue
         # Then: it answers an open queue item it was handed (its
         # reply_nonce), in that item's channel; a fire's answer too.
@@ -6614,10 +6466,7 @@ def process_outbox(state):
         if not bound_elsewhere(state, item):
             note_reply_nonce(state, stray)
         if stray:
-            print(f"Refused outbox item for {item.get('channel_name') or '?'}"
-                  f": {stray} (set aside in "
-                  f"{os.path.basename(OUTBOX_REJECTED_FILE)})", flush=True)
-            rejects.append((redact_nonces(item), stray))
+            _refuse(rejects, item, stray)
             continue
         reply_to = item.get("reply_to")
         qid = _answered_id(state, item)
@@ -6637,20 +6486,13 @@ def process_outbox(state):
         except Exception as e:   # not recorded: the item stays open
             bad = f"proactive: could not record it ({e})"
         if bad:
-            print(f"Rejected outbox item for {item.get('channel_name') or '?'}"
-                  f": {bad} (set aside in "
-                  f"{os.path.basename(OUTBOX_REJECTED_FILE)})", flush=True)
-            rejects.append((redact_nonces(item), bad))
+            _refuse(rejects, item, bad)
             continue
         sched = None  # a refused schedule action: (line, reason, detail)
         if "schedule" in item:
             got = watch_schedule(state, item, index)
             if got and got[0] == "reject":
-                print(f"Refused outbox item for "
-                      f"{item.get('channel_name') or '?'}: {got[1]} (set "
-                      f"aside in {os.path.basename(OUTBOX_REJECTED_FILE)})",
-                      flush=True)
-                rejects.append((redact_nonces(item), got[1]))
+                _refuse(rejects, item, got[1])
                 continue
             sched = got[1:] if got else None
         if "settings" in item:
@@ -6705,56 +6547,8 @@ def process_outbox(state):
             typing_clear(typing_keys)
             settled.append(item)
             continue
-        # Attachments: only generated files bound to the queue item this
-        # reply answers (generated/<its message_id>/), under the
-        # monitor's live may_generate approval for that item (tracked in
-        # gen_approved; the worker's outbox item doesn't carry the flag),
-        # and only into the channel the item came from. There is no
-        # fallback for files without an approval: generation is gated in
-        # code. Nothing is committed before the send succeeds: a retry
-        # re-attaches the same files (kept in _retry), and the approval
-        # (single-use), gen_sent and the media.per_day count settle once.
-        gen_id = _gen_item_id(state, item)
-        approval = _gen_approval(state, gen_id)
-        if approval and approval.get("channel_id") != item.get("channel_id"):
-            print(f"Note: generation approval for item {gen_id} belongs to "
-                  f"channel {approval.get('channel_id')}, not "
-                  f"{item.get('channel_id')}; no attachments", flush=True)
-            approval = None
-        attachments = []  # (send_path, filename) for the send
-        gen_files = []    # [send_path, original] pairs, for _retry
-        if approval and "attachments" in retry:
-            # A retry: the files the first attempt resolved. Re-checked,
-            # because the outbox (and so _retry) is worker-writable.
-            for pair in retry.get("attachments") or []:
-                ok = isinstance(pair, list) and len(pair) == 2 \
-                    and len(_validate_gen_paths(pair, gen_id)) == 2
-                if ok:
-                    attachments.append((pair[0], os.path.basename(pair[0])))
-                    gen_files.append(pair)
-        elif approval:
-            candidates = _validate_gen_paths(item.get("attachments"), gen_id)
-            if not candidates:
-                # The media tool usually returns a remote URL/handle, not the
-                # local filename, so the worker can't name the file. Find it.
-                found = _discover_generated(state, gen_id)
-                if found:
-                    print(f"Attaching discovered generated file: {found}", flush=True)
-                    candidates.append(found)
-                else:
-                    print(f"Note: approved generation for {gen_id} but no "
-                          f"file in generated/{gen_id}/", flush=True)
-            for rp in candidates:
-                send_path, fname = fit_for_discord(rp)
-                if send_path:
-                    attachments.append((send_path, fname))
-                    gen_files.append([send_path, rp])
-                else:
-                    print(f"Attachment too large even compressed: {rp}", flush=True)
-        elif item.get("attachments"):
-            print(f"Note: reply to {reply_to} listed attachments without a "
-                  f"live generation approval for its item; dropped",
-                  flush=True)
+        gen_id, approval, attachments, gen_files = _reply_attachments(
+            state, item, retry)
         # The reply is about to land, which ends the indicator: stop
         # typing for this item now, or a ping right after the send would
         # show typing again for ~10s.
@@ -6828,27 +6622,15 @@ def process_outbox(state):
                 _settle(state, item, "skipped", "403 missing access")
                 settled.append(item)
                 continue
-            now = time.time()
-            first = retry.get("first", now)
-            if now - first >= SEND_RETRY_SECS:
-                # The send may well have landed (a timeout after Discord
-                # created the message looks exactly like a failure), so
-                # stop before the nonce window closes rather than risk a
-                # duplicate.
-                print(f"Giving up on reply to {item.get('author')} in "
-                      f"{item.get('channel_name')} after "
-                      f"{SEND_RETRY_SECS}s of send errors: {e}", flush=True)
-                _settle(state, item, "skipped", f"send failed: {e}"[:200])
-                settled.append(item)
+            if _retry_later(item, retry, e, attachments=gen_files,
+                            picked=retry.get("picked", picked)):
+                remaining.append(item)
                 continue
-            n = retry.get("n", 0) + 1
-            item["_retry"] = {"first": first, "n": n,
-                              "next": now + min(30, 2 ** n),
-                              "attachments": gen_files,
-                              "picked": retry.get("picked", picked)}
-            print(f"Failed to send reply (attempt {n}; retrying, same "
-                  f"nonce): {e}", flush=True)
-            remaining.append(item)
+            print(f"Giving up on reply to {item.get('author')} in "
+                  f"{item.get('channel_name')} after "
+                  f"{SEND_RETRY_SECS}s of send errors: {e}", flush=True)
+            _settle(state, item, "skipped", f"send failed: {e}"[:200])
+            settled.append(item)
 
     _OUTBOX_CURRENT["key"] = None
     # A released hold is used up however its item settled (sent, 403,
@@ -6869,18 +6651,13 @@ def process_outbox(state):
             done_ids.add(item["reply_to"])
             done_frags.add(item["reply_to"])
 
-    nonces = state.get("nl_nonces") or {}
-    for qid in done_ids & set(nonces):
-        del nonces[qid]   # answered: its capability is spent
-    for qid in done_ids & set(state.get("owner_items") or {}):
-        del state["owner_items"][qid]
-    for qid in done_ids & set(state.get("reply_nonces") or {}):
-        del state["reply_nonces"][qid]
+    # Answered: every capability those items held is spent.
+    for key in ("nl_nonces", "owner_items", "reply_nonces", "web_nonces"):
+        held = state.get(key) or {}
+        for qid in done_ids & set(held):
+            del held[qid]
     reply_nonces_write(state)
     nl_write_nonces(state)
-    web = state.get("web_nonces") or {}
-    for qid in done_ids & set(web):
-        del web[qid]      # the same for a web watch capability
     watch_write_web_nonces(state)
 
     def answered(q):
@@ -7103,7 +6880,7 @@ def watch_can_set(uid, from_bot, here, matches):
         return False
 
 
-def watch_can_web(uid, from_bot, here=None, matches=None):
+def watch_can_web(uid, from_bot):
     """Web watches are the owners' only (no setting: each check is a turn
     of the owner's Muse reading the web); never a bot."""
     return not from_bot and str(uid) in OWNER_USER_IDS
@@ -7133,20 +6910,9 @@ def watch_write_web_nonces(state):
     for k in [k for k, v in n.items() if not isinstance(v, dict)
               or now - v.get("at", 0) > 86400]:
         del n[k]
-    for k in list(n)[:-300]:
-        del n[k]
-    body = {k: v["nonce"] for k, v in n.items()}
-    if body == _WEB_NONCES_WRITTEN["body"] \
-            and _WEB_NONCES_WRITTEN["path"] == WEB_NONCES_FILE:
-        return
-    if not body and not os.path.exists(WEB_NONCES_FILE):
-        _WEB_NONCES_WRITTEN.update(body=body, path=WEB_NONCES_FILE)
-        return
-    try:
-        _write_private(WEB_NONCES_FILE, body)
-        _WEB_NONCES_WRITTEN.update(body=body, path=WEB_NONCES_FILE)
-    except OSError as e:
-        print(f"Could not write web_nonces.json: {e}", flush=True)
+    _keep_last(n, 300)
+    _publish(WEB_NONCES_FILE, {k: v["nonce"] for k, v in n.items()},
+             _WEB_NONCES_WRITTEN, create=False)
 
 
 def watch_web_nonce_problem(state, item, qid, meta):
@@ -7193,7 +6959,7 @@ def watch_card(uid, guild_id, dm, from_bot, here, matches):
         return W.card(watch_store().read(), uid, guild_id, dm,
                       owner_dm=owner and dm and not from_bot,
                       can_set=watch_can_set(uid, from_bot, here, matches),
-                      can_web=watch_can_web(uid, from_bot, here, matches))
+                      can_web=watch_can_web(uid, from_bot))
     except Exception as e:
         print(f"Reminders and watches: no list for an item ({e})",
               flush=True)
@@ -7316,7 +7082,7 @@ def _watch_schedule(state, item, index):
         def matches(who):
             return people_match(who, uid, lambda: member_roles(gid, uid))
         can = watch_can_set(uid, False, here, matches)
-        can_web = can and watch_can_web(uid, False, here, matches)
+        can_web = can and watch_can_web(uid, False)
         if can_web and any(c.get("op") == "add" and c.get("check") == "web"
                            for c in changes):
             # (Without the right, decide refuses it in plain words.)
@@ -7386,6 +7152,9 @@ def watch_fire_allowed(uid, name, cid, gid, dm):
         return "none of the owners is in that server"
     if not who_allows({"author": {"id": uid}, "channel_id": cid}, gid, here):
         return "not allowed by who.allow / who.ignore"
+    # Unknown permissions (a failed lookup) let it through, unlike a
+    # match: a fire goes back where its requester asked, and a match it
+    # links was checked against their view when it matched.
     p = user_channel_perms(gid, uid, cid)
     if p is not None and not p & PERM_VIEW_CHANNEL:
         return "they can no longer read that channel"
@@ -7535,13 +7304,8 @@ def _watch_places_due(data, matches, now):
             recs.append(h["es"][0][0])
     # Web watches that may fire this tick: reports waiting (read, not
     # taken: the tool writes the file atomically), and expired checks.
-    try:
-        with open(WEB_RESULTS_FILE) as f:
-            reps = json.load(f)
-    except (OSError, ValueError):
-        reps = []
-    ids = {r.get("id") for r in reps if isinstance(r, dict)} \
-        if isinstance(reps, list) else set()
+    ids = {r.get("id") for r in _read_json(WEB_RESULTS_FILE, list) or []
+           if isinstance(r, dict)}
     for i, r in data["items"].items():
         chk = r.get("check") if isinstance(r, dict) else None
         if i in ids or (chk and chk.get("expires", 0) <= now):
@@ -7619,7 +7383,8 @@ def _watch_hold(data, fid, uid, cid, es, kind, now, next_at, held=None,
     """Keep a fire for later (data["held"]). Into one already held for
     the same person, place and kind it folds: the same watch again
     counts as `more` on its entry ("3 more mentions"), never a second
-    notice. Returns the held record's id."""
+    notice, and nothing is dropped (distinct entries are bounded by the
+    person's own reminders and watches). Returns the held record's id."""
     held_all = data.setdefault("held", {})
     for hid, h in held_all.items():
         if hid != fid and isinstance(h, dict) and h.get("uid") == uid \
@@ -7631,7 +7396,7 @@ def _watch_hold(data, fid, uid, cid, es, kind, now, next_at, held=None,
                     old["more"] = old.get("more", 0) + 1 + e.get("more", 0)
                     if e.get("matched"):
                         old["matched"] = e["matched"]
-                elif len(h["es"]) < W.PER_PERSON_MAX:
+                else:
                     h["es"].append([r, e])
             return hid
     rec = dict(held or {})
@@ -7783,18 +7548,8 @@ def _web_tick(state, data, now, verdicts):
 def watch_write_due(data, now=None):
     """web_watches_due.json: the live checks (muse_watches.web_due), for
     hooks/watch-due.sh; written (mode 600) only when it changes."""
-    body = W.web_due(data, now)
-    if body == _WEB_DUE_WRITTEN["body"] \
-            and _WEB_DUE_WRITTEN["path"] == WEB_DUE_FILE:
-        return
-    if not body and not os.path.exists(WEB_DUE_FILE):
-        _WEB_DUE_WRITTEN.update(body=body, path=WEB_DUE_FILE)
-        return
-    try:
-        _write_private(WEB_DUE_FILE, body)
-        _WEB_DUE_WRITTEN.update(body=body, path=WEB_DUE_FILE)
-    except OSError as e:
-        print(f"Could not write web_watches_due.json: {e}", flush=True)
+    _publish(WEB_DUE_FILE, W.web_due(data, now), _WEB_DUE_WRITTEN,
+             create=False)
 
 
 def watch_fire_upkeep(state, now=None):
@@ -8276,11 +8031,6 @@ def drain_gateway(state, inbox, channels):
     (see note_gateway_seen). Messages from servers outside a non-empty
     bot.guild_ids are ignored."""
     mentions, dms = [], []
-    guild_names = {}
-    for info in channels.values():
-        if info.get("guild_id"):
-            guild_names[info["guild_id"]] = info.get("guild_name",
-                                                     info["guild_id"])
     while True:
         try:
             m = inbox.get_nowait()
@@ -8304,7 +8054,7 @@ def drain_gateway(state, inbox, channels):
             continue
         # Recorded even when the poll got here first: the burst holding
         # this message needs to know when its author last spoke.
-        note_activity(cid, (m.get("author", {}) or {}).get("id"), m["id"])
+        note_activity(cid, _who(m).get("id"), m["id"])
         last = state["last_seen"].get(cid)
         if last and int(m["id"]) <= int(last):
             continue  # the poll loop already handled it
@@ -8326,13 +8076,12 @@ def drain_gateway(state, inbox, channels):
                     continue
                 if not ch or not ch.get("id"):
                     continue
+                g = ch.get("guild_id") or gid
                 info = {"name": ch.get("name") or "?",
-                        "guild_id": ch.get("guild_id") or gid,
-                        "guild_name": guild_names.get(
-                            ch.get("guild_id") or gid,
-                            ch.get("guild_id") or gid),
+                        "guild_id": g,
+                        "guild_name": (GUILDS.get(g) or {}).get("name") or g,
                         "can_send": None,
-                        "thread": ch.get("type") in (10, 11, 12),
+                        "thread": ch.get("type") in _THREAD_TYPES,
                         "parent_id": ch.get("parent_id"),
                         "private": ch.get("type") == 12}
                 if not info["thread"] and ch.get("parent_id"):
@@ -8353,20 +8102,18 @@ def drain_gateway(state, inbox, channels):
             # are even read (dm_sender_allowed): under the default
             # (dms_from: owners) everyone else's DMs are dropped unread
             # and unrecorded; dms.who.replies: off drops all of them.
-            author = m.get("author", {}) or {}
-            if author.get("id") == BOT_ID:
-                record_history(state, cid, [m])
-                note_gateway_seen(state, cid, m["id"])
-                continue  # own messages are context only
-            TM.count("messages_seen",
-                     int(m.get("type", 0) in CONVERSATION_TYPES))
-            if not dm_sender_allowed(author):
-                note_dm_refused(m)
-                continue
+            author = _who(m)
+            own = author.get("id") == BOT_ID
+            if not own:
+                TM.count("messages_seen",
+                         int(m.get("type", 0) in CONVERSATION_TYPES))
+                if not dm_sender_allowed(author):
+                    note_dm_refused(m)
+                    continue
             record_history(state, cid, [m])
             note_gateway_seen(state, cid, m["id"])
-            if m.get("type", 0) not in CONVERSATION_TYPES:
-                continue  # a system notice (a pin): context only
+            if own or m.get("type", 0) not in CONVERSATION_TYPES:
+                continue  # its own messages, system notices: context only
             if hold_fragment(state, cid, m):
                 continue  # folded into a burst already being coalesced
             dms.append((m, "DM with " + (author.get("username") or cid)))
@@ -8397,14 +8144,9 @@ def sweep_mentions(state, queue, channels, dms=True):
     q_ids = {q.get("message_id") for q in queue}
     outbox_targets = set()
     for path in (OUTBOX_FILE, OUTBOX_PROCESSING_FILE):
-        try:
-            with open(path) as f:
-                for i in json.load(f):
-                    if isinstance(i, dict):
-                        outbox_targets.update((i.get("reply_to"),
-                                               i.get("item")))
-        except Exception:
-            pass
+        for i in _read_json(path, list) or []:
+            if isinstance(i, dict):
+                outbox_targets.update((i.get("reply_to"), i.get("item")))
     quar_ids = _quarantine_ids()
     replied = set(state.get("replied_to", []))
     pending_ids = set()
@@ -8437,7 +8179,7 @@ def sweep_mentions(state, queue, channels, dms=True):
             continue
         for m in sorted(msgs, key=lambda x: int(x["id"])):
             mid = m["id"]
-            author = m.get("author", {}) or {}
+            author = _who(m)
             if author.get("id") == BOT_ID:
                 continue  # (other bots: trigger_kind applies behavior.bots)
             if m.get("type", 0) not in CONVERSATION_TYPES:
@@ -8689,20 +8431,18 @@ def _note_no_send(msg, cname):
               f"messages there.", flush=True)
     ledger_record(msg["id"], "skipped", "no send permission in channel",
                   channel_id=cid,
-                  author=(msg.get("author", {}) or {}).get("username"),
-                  author_id=(msg.get("author", {}) or {}).get("id"))
+                  author=_who(msg).get("username"),
+                  author_id=_who(msg).get("id"))
 
 
 
 # ---------------------------------------------------------------------------
-# Sliced REST work (2026-10-18). The main loop used to run the whole REST
-# poll (a request per channel), the sweep, the thread refresh, and
-# discovery inline. Behind a slow proxy (0.6s a request, ~40 channels)
-# one poll blocked the loop for ~23s of every 30, so a DM the gateway had
-# delivered at once sat in the inbox for 25-95s before it was even
-# staged. Now each tick spends about REST_SLICE_SECS on REST reads (at
-# least one request when any is due) and the fast path (gateway drain,
-# staging, burst flushes, typing, the outbox) runs between slices.
+# Sliced REST work. The REST poll (a request per channel), the sweep, the
+# thread refresh and discovery would block the loop for many seconds
+# behind a slow proxy, so each tick spends about REST_SLICE_SECS on REST
+# reads (at least one request when any is due) and the fast path
+# (gateway drain, staging, burst flushes, typing, the outbox) runs
+# between slices.
 #
 # The poll is a rotation over its targets: the owners' DM channels, then
 # every monitored channel. A rotation starts when the previous one has
@@ -8937,6 +8677,13 @@ def discovery_iter(state):
     save_state(state)
 
 
+def _adopt_identity(me, how=""):
+    global BOT_ID, BOT_USER_ID, BOT_NAME
+    BOT_ID = BOT_USER_ID = me.get("id")
+    BOT_NAME = me.get("username")
+    print(f"Bot user id: {BOT_ID}{how}", flush=True)
+
+
 def outbox_waiting(since):
     """True when reply_outbox.json holds a reply written after since (the
     last outbox pass): a cheap stat, as the monitor leaves the file as
@@ -8951,14 +8698,13 @@ def outbox_waiting(since):
 
 
 def main():
-    global BOT_USER_ID, BOT_ID, BOT_NAME, CHANNELS, GUILDS, _FORCE_DISCOVERY
+    global CHANNELS, GUILDS, _FORCE_DISCOVERY
     _acquire_singleton()
     TM.start()
     touch_heartbeat()
-    # Identity FIRST, discovery second: the watchdog's health check waits
+    # Identity first, discovery second: the watchdog's health check waits
     # for the identity marker, and full discovery (a probe per channel
-    # and thread) took ~37s by 2026-10-13, past the watchdog's old 30s
-    # window, so it kept killing healthy monitors mid-startup.
+    # and thread) can take longer than its window.
     #
     # Marker contract with watchdog.sh:
     #   "Bot user id: <id>"    identity confirmed (here, in-loop, or from
@@ -8967,18 +8713,11 @@ def main():
     #                          heal (429 storm, network): the monitor is
     #                          up, keeps retrying, and the gateway still
     #                          delivers. The watchdog counts it as a
-    #                          start; it used to print the "Bot user id"
-    #                          marker here so a 429 storm would not get a
-    #                          gateway-live monitor killed (2026-10-15),
-    #                          which also hid a revoked token.
+    #                          start, without hiding a revoked token.
     #   "TOKEN REJECTED"       a 401: the monitor exits (status 3) and the
     #                          watchdog raises the token alert.
     try:
-        _me = api_get("/users/@me")
-        BOT_USER_ID = _me.get("id")
-        BOT_ID = BOT_USER_ID
-        BOT_NAME = _me.get("username")
-        print(f"Bot user id: {BOT_USER_ID}", flush=True)
+        _adopt_identity(api_get("/users/@me"))
     except Exception as e:
         if getattr(e, "code", None) == 401:
             token_rejected_exit("401 from /users/@me")
@@ -9010,7 +8749,7 @@ def main():
     # Daemon thread: it only enqueues raw messages and sets the wake event;
     # the main loop below classifies and stages them. REST polling keeps
     # covering everything as gap repair and full fallback, so a dead
-    # gateway degrades silently to the old 30s cadence.
+    # gateway degrades to the 30s poll.
     token = TOKEN
     _gateway_inbox = pyqueue.Queue()
     _ix_inbox = pyqueue.Queue()  # interactions, see below
@@ -9067,12 +8806,7 @@ def main():
                                 or "gateway closed with code 4004")
         touch_heartbeat()
         if BOT_USER_ID is None and _gateway_status.get("user"):
-            _me = _gateway_status["user"]
-            BOT_USER_ID = _me.get("id")
-            BOT_ID = BOT_USER_ID
-            BOT_NAME = _me.get("username")
-            print(f"Bot user id: {BOT_USER_ID} (from gateway READY)",
-                  flush=True)
+            _adopt_identity(_gateway_status["user"], " (from gateway READY)")
         now = time.time()
         backing = rest_backing_off()
         backoff_seen = backoff_seen or backing
@@ -9184,7 +8918,7 @@ def main():
             # staged bursts too, so the user sees it while the burst is
             # being "read", not after the hold. The typing thread pings;
             # this only tells it which channels are waiting.
-            typing_refresh(state)
+            typing_refresh(state, queue)
         except Exception as e:
             print(f"Typing error: {e}", flush=True)
 
@@ -9210,12 +8944,8 @@ def main():
                 _rl_note_clean_cycle()
                 if BOT_USER_ID is None:
                     try:
-                        _me = api_get("/users/@me")
-                        BOT_USER_ID = _me.get("id")
-                        BOT_ID = BOT_USER_ID
-                        BOT_NAME = _me.get("username")
-                        print(f"Bot user id: {BOT_USER_ID} "
-                              f"(recovered in-loop)", flush=True)
+                        _adopt_identity(api_get("/users/@me"),
+                                        " (recovered in-loop)")
                     except Exception as e:
                         if getattr(e, "code", None) == 401:
                             token_rejected_exit("401 from /users/@me")

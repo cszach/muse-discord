@@ -104,31 +104,26 @@ def generated_file(path):
     return rp
 
 
-def _bot_cfg():
+CONFIG = os.environ.get("MUSE_DISCORD_CONFIG") or os.path.join(
+    PACKAGE_DIR, "config.yaml")
+
+
+def _settings():
+    """The package's settings (muse_settings), or None when the config
+    cannot be read."""
     try:
-        import yaml
-        path = os.environ.get("MUSE_DISCORD_CONFIG") or os.path.join(
-            PACKAGE_DIR, "config.yaml")
-        with open(path) as f:
-            cfg = yaml.safe_load(f) or {}
-        return cfg.get("bot") or {}
+        import muse_settings
+        return muse_settings.load(CONFIG, os.path.join(PACKAGE_DIR,
+                                                       "plugins"))
     except Exception:
-        return {}
+        return None
 
 
 def _owners():
     """The owners' user ids from the config, or None when it cannot be
     read (then every DM counts as an owner's)."""
-    path = os.environ.get("MUSE_DISCORD_CONFIG") or os.path.join(
-        PACKAGE_DIR, "config.yaml")
-    try:
-        sys.path.insert(0, PACKAGE_DIR)
-        import muse_settings
-        owners = muse_settings.load(
-            path, os.path.join(PACKAGE_DIR, "plugins")).owners
-        return {str(o) for o in owners}
-    except Exception:
-        return None
+    st = _settings()
+    return None if st is None else {str(o) for o in st.owners}
 
 
 def _live_nonce(message_id, path=None):
@@ -158,6 +153,11 @@ def _matches(want, got):
         want.encode(), got.encode("utf-8", "replace"))
 
 
+def _for_id(mid):
+    if not re.fullmatch(r"[1-9][0-9]{16,19}", mid):
+        raise SystemExit(f"Refusing: --for {mid!r} is not a Discord id.")
+
+
 def require_owner_command(lookup=False):
     """Refuse unless --for names an open owner-command queue item and
     --nonce is its owner_command_nonce (see the module docstring); for a
@@ -170,8 +170,7 @@ def require_owner_command(lookup=False):
             "Refusing: this subcommand is for an owner's command only. "
             "Put --for <the item's message_id> --nonce <its "
             "owner_command_nonce> before the subcommand.")
-    if not re.fullmatch(r"[1-9][0-9]{16,19}", mid):
-        raise SystemExit(f"Refusing: --for {mid!r} is not a Discord id.")
+    _for_id(mid)
     if _matches(_live_nonce(mid, OWNER_ITEMS_FILE), got):
         BINDING["entry"] = _owner_entry(mid)
         return
@@ -211,7 +210,8 @@ def guard_target(cid):
 
 # The monitor's private files of live nonces (none may ever be posted):
 # flat {id: nonce} maps, and files whose records hold a "nonce" field.
-FLAT_NONCE_FILES = ("item_nonces.json", "web_nonces.json")
+FLAT_NONCE_FILES = ("item_nonces.json", "web_nonces.json",
+                    "proactive_nonce.json")
 RECORD_NONCE_FILES = ("web_watches_due.json",)
 
 
@@ -278,11 +278,8 @@ def guard_channel(cid):
             f"Refusing: {cid} is an owner's DM. Only a run handed that DM "
             f"may act there: put --for <its message_id> --nonce <its "
             f"owner_dm_nonce> before the subcommand.")
-    if not re.fullmatch(r"[1-9][0-9]{16,19}", mid):
-        raise SystemExit(f"Refusing: --for {mid!r} is not a Discord id.")
-    want = _live_nonce(mid)
-    if not want or not hmac.compare_digest(
-            want.encode(), got.encode("utf-8", "replace")):
+    _for_id(mid)
+    if not _matches(_live_nonce(mid), got):
         raise SystemExit(f"Refusing: --nonce is not the live owner_dm_nonce "
                          f"of {mid}.")
     try:
@@ -292,25 +289,13 @@ def guard_channel(cid):
     return ch
 
 
-def _token_sources():
-    """token_from as [("env", NAME) | ("file", path)], in order."""
-    path = os.environ.get("MUSE_DISCORD_CONFIG") or os.path.join(
-        PACKAGE_DIR, "config.yaml")
-    try:
-        sys.path.insert(0, PACKAGE_DIR)
-        import muse_settings
-        return muse_settings.load(
-            path, os.path.join(PACKAGE_DIR, "plugins")).token_sources()
-    except Exception:
-        bot = _bot_cfg()  # the old layout, read directly
-        out = [("env", bot["token_env"])] if bot.get("token_env") else []
-        return out + [("file", bot.get("token_file")
-                       or "~/.config/muse-discord/bot_token")]
-
-
 def _load_token():
+    """token_from, in order (an invalid config: the default file)."""
+    st = _settings()
+    sources = st.token_sources() if st is not None \
+        else [("file", "~/.config/muse-discord/bot_token")]
     files = []
-    for kind, where in _token_sources():
+    for kind, where in sources:
         if kind == "env":
             if where and os.environ.get(where):
                 return os.environ[where].strip()
@@ -338,15 +323,14 @@ def bot_id():
     return BOT_ID
 
 
-def api(method, path, data=None):
-    body = json.dumps(data).encode() if data is not None else b""
+def _request(method, path, body, ctype):
     req = urllib.request.Request(API + path, data=body, method=method)
     req.add_header("Authorization", f"Bot {TOKEN}")
     # Cloudflare's bad-browser check (error 1010) rejects bare urllib
     # requests: a User-Agent and Content-Type are required, even for
     # bodyless PUTs like reactions.
     req.add_header("User-Agent", "DiscordBot (muse-discord-cli, 1.0)")
-    req.add_header("Content-Type", "application/json")
+    req.add_header("Content-Type", ctype)
     req.add_header("Content-Length", str(len(body)))
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
@@ -355,6 +339,11 @@ def api(method, path, data=None):
     except urllib.error.HTTPError as e:
         detail = e.read()[:300].decode("utf-8", "replace")
         raise SystemExit(f"Discord API {e.code} on {method} {path}: {detail}")
+
+
+def api(method, path, data=None):
+    body = json.dumps(data).encode() if data is not None else b""
+    return _request(method, path, body, "application/json")
 
 
 def api_multipart(path, payload, file_path):
@@ -384,20 +373,8 @@ def api_multipart(path, payload, file_path):
         + file_bytes + b"\r\n",
         f"--{boundary}--\r\n".encode(),
     ]
-    body = b"".join(chunks)
-    req = urllib.request.Request(API + path, data=body, method="POST")
-    req.add_header("Authorization", f"Bot {TOKEN}")
-    req.add_header("User-Agent", "DiscordBot (muse-discord-cli, 1.0)")
-    req.add_header("Content-Type",
-                   f"multipart/form-data; boundary={boundary}")
-    req.add_header("Content-Length", str(len(body)))
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            raw = r.read()
-            return json.loads(raw) if raw else {"ok": True, "status": r.status}
-    except urllib.error.HTTPError as e:
-        detail = e.read()[:300].decode("utf-8", "replace")
-        raise SystemExit(f"Discord API {e.code} on POST {path}: {detail}")
+    return _request("POST", path, b"".join(chunks),
+                    f"multipart/form-data; boundary={boundary}")
 
 
 def cmd_resolve_channel(args):
@@ -470,8 +447,12 @@ def cmd_thread(args):
     """
     forum_id, title, text = snowflake(args[0]), args[1], args[2]
     upload = generated_file(args[3]) if len(args) > 3 else None
-    payload = {"name": scrub(title),
-               "message": {"content": scrub(text),
+    if upload:   # what the file holds is posted too
+        with open(upload, "rb") as f:
+            scrub(f.read().decode("latin-1"))
+    scrub(title + text)   # each, and a secret split across the two
+    payload = {"name": title,
+               "message": {"content": text,
                            "allowed_mentions": ALLOWED_MENTIONS},
                "auto_archive_duration": 1440}
     guard_target(forum_id)

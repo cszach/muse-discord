@@ -197,7 +197,7 @@ class StillWorks(_B):
         for m in items:
             self.outbox(self.reply(m, "hi", reply_nonce=None))
         posts = [d.get("content") or "" for _, d in self.mod.api.posts]
-        self.assertTrue(any("item_nonces.json" in c
+        self.assertTrue(any("can't save files" in c
                             for c in posts), posts)
         self.assertNotIn(self.mod.STALE_PROMPT_DM, posts)
         self.assertFalse(os.path.exists(self.mod.STALE_PROMPT_FILE))
