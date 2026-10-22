@@ -979,7 +979,23 @@ def api_get(path):
     def _do():
         with urllib.request.urlopen(req, timeout=READ_TIMEOUT_SECS) as r:
             return json.load(r)
-    return _api_call(_do)
+
+    # Transient connection drops (IncompleteRead, connection reset or
+    # closed mid-response) otherwise fail the whole poll cycle and delay
+    # message handling until the next one. GETs are idempotent, so retry
+    # a few times inside the cycle. Errors carrying an HTTP status (401,
+    # 429, ...) are never retried: they are not transient drops.
+    last_exc = None
+    for attempt in range(3):
+        try:
+            return _api_call(_do)
+        except Exception as e:
+            if getattr(e, "code", None) is not None:
+                raise
+            last_exc = e
+            if attempt < 2:
+                time.sleep(0.6 * (attempt + 1))
+    raise last_exc
 
 
 # ---------------------------------------------------------------------------
