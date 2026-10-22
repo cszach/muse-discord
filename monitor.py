@@ -7025,6 +7025,13 @@ def _watch_schedule(state, item, index):
         # right, decide refuses a web watch in plain words.)
         can_web = can and watch_can_web(uid, False, dm) \
             and _meta_owner_dm(meta)
+        if can_web and meta.get("has_inputs") and any(
+                c.get("op") == "add" and c.get("check") == "web"
+                for c in changes):
+            # Someone else's words (a document, a quoted message) could
+            # have put it there.
+            raise W.Refused(W.LINES["web-inputs"], W.REASON_NOT_ALLOWED,
+                            {"kind": "watch-web"})
         resolved = {}
         if can:
             for c in changes:
@@ -7211,7 +7218,8 @@ def watch_tick(state, now=None):
                 print(f"Watch {wid} ended (its time ran out).", flush=True)
             queued += _watch_make_fires(state, data, entries, now,
                                         verdicts, counts)
-    if os.path.exists(WEB_RESULTS_FILE) or W.web_work(data, now):
+    if os.path.exists(WEB_RESULTS_FILE) \
+            or W.web_work(data, now, _web_owners()):
         with store.edit() as data:
             queued += _web_tick(state, data, now, verdicts)
     watch_write_due(store.read(), now)
@@ -7442,6 +7450,10 @@ def _web_take_results():
     return reps if isinstance(reps, list) else []
 
 
+def _web_owners():
+    return {str(o) for o in OWNER_USER_IDS}
+
+
 def _web_tick(state, data, now, verdicts):
     """Web watches, under the store's lock: apply the checker's reports
     (only with a live check's nonce, for an active watch; anything else
@@ -7450,8 +7462,9 @@ def _web_tick(state, data, now, verdicts):
     up. A summary that looks like prompt injection (is_suspicious) is
     withheld from the worker."""
     out = []
+    owners = _web_owners()
     for rep in _web_take_results():
-        res, i, rec = W.web_apply(data, rep, now)
+        res, i, rec = W.web_apply(data, rep, now, owners)
         if res is None:
             print(f"Refused a web watch report for {i or '?'}: {rec}.",
                   flush=True)
@@ -7471,7 +7484,6 @@ def _web_tick(state, data, now, verdicts):
                       f"injection; withheld.", flush=True)
                 e["summary_withheld"] = True
             out.append((rec["requester"], rec["channel_id"], (rec, e)))
-    owners = {str(o) for o in OWNER_USER_IDS}
     for i, rec in W.web_issue(data, now, owners=owners):
         why = (f"no answer {W.WEB_MAX_FAILS} times"
                if rec.get("fails", 0) >= W.WEB_MAX_FAILS
