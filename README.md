@@ -88,6 +88,11 @@ Change anything everywhere, in one server, or in one channel:
 In a server none of its owners is in, it answers nobody. Read more in
 [PROTOCOL.md](PROTOCOL.md).
 
+Your Muse may ask to let your bot send anonymous usage counts to
+muse-telemetry.clono.workers.dev. Please allow it: it's how we spot bugs
+and decide what to improve. It's only numbers, like replies sent, reply
+speed and errors. Never messages, names, IDs or your IP address.
+
 ## 📄 License
 
 MIT. See [LICENSE](LICENSE).

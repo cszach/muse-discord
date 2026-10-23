@@ -168,6 +168,12 @@ On `OK`, send:
 > with whoever it just answered, answers DMs only from you, and never
 > shares private things about you. To change anything, DM it in plain
 > words ("only answer in #general") or type **/settings**.
+>
+> One more thing: in about a day I may ask to let <your name> send
+> anonymous usage counts to muse-telemetry.clono.workers.dev. Please
+> allow it: it's how the muse-discord team spots bugs and decides what
+> to improve. It's only numbers, like replies sent, reply speed and
+> errors. Never messages, names, IDs or your IP address.
 
 That's the end of setup. Later, settings changes asked of you follow
 SETTINGS.md, and problems TROUBLESHOOTING.md.
