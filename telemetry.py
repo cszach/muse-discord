@@ -10,9 +10,9 @@ Worker (telemetry/worker/). Nothing else, and nowhere else.
 Never in a report: message content, names, any Discord id, tokens, file
 paths, error messages, IP addresses (the Worker stores none), or any
 time finer than the day. Member counts are rounded down to a power of 2.
-README.md, "Privacy and usage stats", lists every field; build_payload
-below is the one place a report is made, and `bin/telemetry.py show`
-prints exactly what would be sent next.
+build_payload below is the one place a report is made (every field is
+there), and `bin/telemetry.py show` prints exactly what would be sent
+next.
 
 Off when any of these holds (then nothing is sent, and the days it was
 off are never sent later):
@@ -27,8 +27,14 @@ below, or MUSE_DISCORD_TELEMETRY_URL); the counts are still kept, so
 
 The monitor must never block, crash or slow down because of this: every
 Recorder method swallows its own errors, the send runs on a daemon
-thread with a short timeout, and a failed send is tried again the next
-day (unsent days older than KEEP_DAYS are dropped).
+thread with a short timeout, and a failed send is tried again later
+that day (after RETRY_SECS, doubling each time) and on the days after
+(unsent days older than KEEP_DAYS are dropped). Why it failed goes to
+the log and `bin/telemetry.py status`, never into a report. When the
+endpoint has been unreachable on NOTICE_AFTER_DAYS days in a row (on
+Muse, usually because nobody approved the request to reach it), the
+owners get one DM saying so (take_notice). `bin/telemetry.py send` asks
+the running monitor to send now (the SEND_NOW_FILE flag).
 
 Standard library only.
 """
@@ -44,6 +50,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timezone
@@ -62,6 +69,9 @@ FLUSH_SECS = 300            # counters reach telemetry.json this often
 TICK_SECS = 30              # tick() does its work at most this often
 JITTER_SECS = 3 * 3600      # the daily send waits up to this into the day
 TIMEOUT_SECS = 10           # per request
+RETRY_SECS = 3600           # a failed send retries after this, doubling
+NOTICE_AFTER_DAYS = 3       # unreachable this many days: tell the owners
+SEND_NOW_FILE = "telemetry.send_now"   # next to telemetry.json
 LATENCY_MAX_SECS = 3600     # longer latencies count as this
 MAX_CRASH_NAMES = 20
 MAX_WAKES_BYTES = 1 << 20   # a wakes file past this is just dropped
@@ -94,6 +104,14 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}"
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _SEMVER_RE = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_USERINFO_RE = re.compile(r"//[^/@\s]+@|[^\s/'\"@]+:[^\s'\"]*@")
+
+NOTICE_TEXT = (
+    "My anonymous usage stats haven't reached "
+    "{host} for {days} days. Most likely Muse "
+    "asked you to allow it and the request wasn't approved. If you're "
+    "happy to share them, pick the \"always\" option next time Muse asks. "
+    "To stop them instead, tell me \"turn off usage stats\".")
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +126,19 @@ def day_start(day):
     """The epoch second a UTC day ("YYYY-MM-DD") starts."""
     return datetime.strptime(day, "%Y-%m-%d").replace(
         tzinfo=timezone.utc).timestamp()
+
+
+def day_secs(day):
+    """day_start for a valid "YYYY-MM-DD", else None."""
+    try:
+        return day_start(day) if _DAY_RE.match(str(day or "")) else None
+    except ValueError:
+        return None
+
+
+def is_release(version):
+    """A vX.Y.Z tag: the only versions that send."""
+    return bool(version and _SEMVER_RE.match(version))
 
 
 def env_off(environ=None):
@@ -472,6 +503,14 @@ def drain_wakes(path):
             pass
 
 
+def failure_reason(exc):
+    """A short, log-safe reason for a failed post: the exception's class
+    and reason, with any user:password@ in a URL masked."""
+    why = getattr(exc, "reason", None) or exc
+    text = f"{type(exc).__name__}: {why}"
+    return _USERINFO_RE.sub("//***@", text)[:200]
+
+
 def post_json(url, obj, timeout=TIMEOUT_SECS):
     """POST obj as JSON; the HTTP status (an HTTPError's too). Raises
     for anything else (no connection, a timeout)."""
@@ -690,6 +729,8 @@ class Recorder:
             if not on:
                 rec["off"] = True
                 d["pending"] = []   # days of an install that is off now
+                d.pop("notice", None)
+                d.pop("failing", None)
             if st is not None and self.ms is not None:
                 lines, d["history_mark"] = self.ms.history_since(
                     getattr(st, "overlay_doc", None), d.get("history_mark"))
@@ -705,9 +746,10 @@ class Recorder:
                 "ahead": self.ahead, "modified": self.modified,
                 "python": python_minor(), "os": os_family()}
             self._take_result(d, now)
+            forced = self._sending is None and self._take_send_now()
             if on and self.released() and endpoint(self.environ) \
                     and d["pending"] and self._sending is None \
-                    and self._send_due(d, now):
+                    and (forced or self._send_due(d, now)):
                 self._start_send(d, now)
             if force or now - self._last_flush >= FLUSH_SECS \
                     or self._flushed_day != rec["day"]:
@@ -717,14 +759,15 @@ class Recorder:
     def released(self):
         """Only a release (a vX.Y.Z tag) sends: a dev
         checkout, an unreleased main or an unknown version never does."""
-        return bool(self.version and _SEMVER_RE.match(self.version))
+        return is_release(self.version)
 
     def _send_due(self, d, now):
         """One attempt per UTC day, after a random time within the first
         JITTER_SECS of it (drawn once per day)."""
         today = utc_day(now)
         if d.get("last_attempt") == today:
-            return False
+            after = d.get("retry_after")   # set when today's send failed
+            return isinstance(after, (int, float)) and now >= after
         sched = d.get("send_after")
         if not isinstance(sched, (int, float)) \
                 or utc_day(sched) != today:
@@ -733,29 +776,36 @@ class Recorder:
         return now >= sched
 
     def _start_send(self, d, now):
+        tries = d.get("tries")
+        d["tries"] = max(0, tries) + 1 if isinstance(tries, int) \
+            and d.get("last_attempt") == utc_day(now) else 1
         d["last_attempt"] = utc_day(now)
+        d.pop("retry_after", None)
         install_id = read_install_id(self.paths()[1])
         payloads = [build_payload(p, install_id) for p in d["pending"]]
         url = endpoint(self.environ) + REPORT_PATH
         attempt = utc_day(now)
 
         def run():
-            sent, dropped = [], []
+            sent, dropped, error, reached = [], [], None, False
             try:
                 for p in payloads:
                     try:
                         status = self.post(url, p)
-                    except Exception:
-                        break       # offline / timeout: try tomorrow
+                    except Exception as e:
+                        error = failure_reason(e)   # offline / timeout
+                        break
+                    reached = True
                     if 200 <= status < 300:
                         sent.append(p["day"])
                     elif 400 <= status < 500 and status != 429:
                         dropped.append(p["day"])  # refused: never again
                     else:
+                        error = f"HTTP {status}"
                         break
             finally:
                 with self.lock:
-                    self._result = (attempt, sent, dropped)
+                    self._result = (attempt, sent, dropped, error, reached)
 
         t = threading.Thread(target=run, daemon=True, name="telemetry-send")
         self._sending = t
@@ -764,7 +814,7 @@ class Recorder:
     def _take_result(self, d, now):
         if self._result is None:
             return
-        attempt, sent, dropped = self._result
+        attempt, sent, dropped, error, reached = self._result
         self._result = None
         self._sending = None
         gone = set(sent) | set(dropped)
@@ -772,4 +822,52 @@ class Recorder:
         d["last_send"] = {"day": attempt, "sent": len(sent),
                           "refused": len(dropped),
                           "ok": not d["pending"]}
+        if reached:
+            d.pop("failing", None)
+            d.pop("notice", None)
+        if d["pending"] and error:
+            d["last_send"]["error"] = error
+            tries = d.get("tries") if isinstance(d.get("tries"), int) else 1
+            d["retry_after"] = now + RETRY_SECS * 2 ** min(max(tries, 1) - 1,
+                                                           5)
+            at = datetime.fromtimestamp(d["retry_after"], timezone.utc)
+            print(f"Telemetry: send failed ({error}); trying again after "
+                  f"{at:%Y-%m-%d %H:%M} UTC.", flush=True)
+        if d["pending"] and error and not reached:
+            # Unreachable on consecutive days: {since, last} (days).
+            f = d.get("failing") if isinstance(d.get("failing"), dict) \
+                else {}
+            since, last = day_secs(f.get("since")), day_secs(f.get("last"))
+            day = day_start(attempt)
+            if since is None or last is None or day - last > 86400 \
+                    or last < since:
+                since = day
+            d["failing"] = {"since": utc_day(since), "last": attempt}
+            if day - since >= (NOTICE_AFTER_DAYS - 1) * 86400 \
+                    and d.get("notice") is None:
+                d["notice"] = "due"
         self._flush_locked()
+
+    @_safe
+    def take_notice(self, settings=None):
+        """The owner DM about an unreachable endpoint, once (else None):
+        the monitor sends it. settings: as for tick."""
+        st = settings() if callable(settings) else settings
+        with self.lock:
+            d = self._load()
+            if d.get("notice") != "due" or not enabled(st, self.environ):
+                return None
+            d["notice"] = "sent"
+            self._flush_locked()
+        host = urllib.parse.urlsplit(endpoint(self.environ)).hostname
+        return NOTICE_TEXT.format(host=host or "the stats server",
+                                  days=NOTICE_AFTER_DAYS)
+
+    def _take_send_now(self):
+        """True (once) when `bin/telemetry.py send` asked for a send."""
+        try:
+            os.unlink(os.path.join(os.path.dirname(self.paths()[0]),
+                                   SEND_NOW_FILE))
+            return True
+        except OSError:
+            return False

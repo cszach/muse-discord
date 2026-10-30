@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""muse-discord usage stats (anonymous, opt-out; see telemetry.py and the
-README's "Privacy and usage stats").
+"""muse-discord usage stats (anonymous, opt-out; see telemetry.py).
 
     bin/telemetry.py show
         Print exactly the report(s) that would be sent next, as JSON on
@@ -8,8 +7,11 @@ README's "Privacy and usage stats").
         counts so far (sent only after the day closes). The monitor
         writes its counts to telemetry.json every few minutes.
     bin/telemetry.py status
-        On or off (and why), where reports go, the last send, and how
-        many days are waiting.
+        On or off (and why), where reports go, the last send (and why
+        it failed), and how many days are waiting.
+    bin/telemetry.py send
+        Ask the running monitor to send the waiting days now (within a
+        minute) instead of at its next scheduled try.
     bin/telemetry.py off | on
         Turn usage stats off or on (telemetry.usage_stats, written like
         `bin/settings.py set`; the owners get the usual change notice).
@@ -37,6 +39,7 @@ import telemetry as T  # noqa: E402
 PLUGINS = os.path.join(PKG, "plugins")
 DATA = os.path.join(PKG, "telemetry.json")
 ID_FILE = os.path.join(PKG, "telemetry_id")
+SEND_NOW = os.path.join(PKG, T.SEND_NOW_FILE)
 
 
 def _cfg(args):
@@ -100,11 +103,20 @@ def cmd_status(args):
     print(f"Endpoint:    {T.endpoint() or '(none configured: nothing is sent)'}")
     last = d.get("last_send")
     if isinstance(last, dict):
+        retry = d.get("retry_after")
+        if last.get("ok"):
+            then = ""
+        elif isinstance(retry, (int, float)) and abs(retry) < 1e11 \
+                and d.get("last_attempt") == T.utc_day():
+            at = datetime.fromtimestamp(retry, timezone.utc)
+            then = f"; the rest is retried after {at:%H:%M} UTC"
+        else:
+            then = "; the rest is retried the next day"
         print(f"Last send:   {last.get('day')}: {last.get('sent', 0)} "
               f"day(s) sent" + (f", {last['refused']} refused"
-                                if last.get("refused") else "")
-              + ("" if last.get("ok") else "; the rest is retried the "
-                 "next day"))
+                                if last.get("refused") else "") + then)
+        if last.get("error"):
+            print(f"Failed with: {last['error']}")
     else:
         print("Last send:   never")
     pending = [p.get("day") for p in d.get("pending") or []
@@ -149,6 +161,31 @@ def cmd_switch(args, value):
     return 0
 
 
+def cmd_send(args):
+    why = _why_off(_settings(args))
+    pending = [p for p in T.load_file(DATA).get("pending") or []
+               if isinstance(p, dict)]
+    if why:
+        print(f"Usage stats are {why}: nothing is sent.")
+        return 1
+    if not T.endpoint():
+        print("No endpoint is configured: nothing is sent.")
+        return 1
+    version = T.installed_version(PKG)
+    if not T.is_release(version):
+        print(f"This copy ({version or 'unknown version'}) is not a "
+              f"release: only releases send.")
+        return 1
+    if not pending:
+        print("Nothing is waiting to be sent.")
+        return 0
+    with open(SEND_NOW, "w"):
+        pass
+    print(f"Asked the monitor to send {len(pending)} waiting day(s) now; "
+          f"check `bin/telemetry.py status` in a minute.")
+    return 0
+
+
 def cmd_reset_id(args):
     T.reset_install_id(ID_FILE)
     print("New install id made; the next report uses it.")
@@ -165,12 +202,15 @@ def main(argv=None):
     ap.add_argument("--by", default="bin/telemetry.py",
                     help="who asked, for off/on (a name)")
     ap.add_argument("command",
-                    choices=("show", "status", "off", "on", "reset-id"))
+                    choices=("show", "status", "send", "off", "on",
+                             "reset-id"))
     args = ap.parse_args(argv)
     if args.command == "show":
         return cmd_show(args)
     if args.command == "status":
         return cmd_status(args)
+    if args.command == "send":
+        return cmd_send(args)
     if args.command in ("off", "on"):
         return cmd_switch(args, args.command)
     return cmd_reset_id(args)
