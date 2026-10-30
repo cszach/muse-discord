@@ -137,8 +137,8 @@ NL = _import_local("settings_nl")      # settings requests in plain words
 W = _import_local("muse_watches")      # reminders and watches
 SCAN = _import_local("secret_scan")    # the outgoing secret filter
 
-# Anonymous daily usage counts (telemetry.py; README, "Privacy and usage
-# stats"). Off with telemetry.usage_stats: off or MUSE_DISCORD_TELEMETRY=off.
+# Anonymous daily usage counts (telemetry.py). Off with
+# telemetry.usage_stats: off or MUSE_DISCORD_TELEMETRY=off.
 TELEMETRY_FILE = os.path.join(BASE_DIR, "telemetry.json")
 TELEMETRY_ID_FILE = os.path.join(BASE_DIR, "telemetry_id")
 TELEMETRY_WAKES_FILE = os.path.join(BASE_DIR, "telemetry.wakes")
@@ -2276,7 +2276,7 @@ def announce_update(state):
 def telemetry_notice():
     """DM the owners once when usage stats have not reached their
     endpoint for days (telemetry.py, take_notice)."""
-    text = TM.take_notice()
+    text = TM.take_notice(settings)
     if text:
         notify_owners(text)
 

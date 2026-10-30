@@ -1264,7 +1264,8 @@ daily usage counts (`telemetry.py`; `bin/telemetry.py show` prints the
 next report). The wake hook appends a line to `telemetry.wakes` per
 wake once `telemetry.json` exists; another runtime may too (else wakes
 count 0). `telemetry.send_now`, written by `bin/telemetry.py send`,
-asks the monitor to send the waiting days at once.
+asks the monitor to send the waiting days at its next tick (once no
+send is in flight).
 
 ### never_share holds
 

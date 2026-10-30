@@ -50,6 +50,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timezone
@@ -103,11 +104,11 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}"
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _SEMVER_RE = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_USERINFO_RE = re.compile(r"//[^/@\s]+@")
+_USERINFO_RE = re.compile(r"//[^/@\s]+@|[^\s/'\"@]+:[^\s'\"]*@")
 
 NOTICE_TEXT = (
     "My anonymous usage stats haven't reached "
-    "muse-telemetry.clono.workers.dev for {days} days. Most likely Muse "
+    "{host} for {days} days. Most likely Muse "
     "asked you to allow it and the request wasn't approved. If you're "
     "happy to share them, pick the \"always\" option next time Muse asks. "
     "To stop them instead, tell me \"turn off usage stats\".")
@@ -125,6 +126,19 @@ def day_start(day):
     """The epoch second a UTC day ("YYYY-MM-DD") starts."""
     return datetime.strptime(day, "%Y-%m-%d").replace(
         tzinfo=timezone.utc).timestamp()
+
+
+def day_secs(day):
+    """day_start for a valid "YYYY-MM-DD", else None."""
+    try:
+        return day_start(day) if _DAY_RE.match(str(day or "")) else None
+    except ValueError:
+        return None
+
+
+def is_release(version):
+    """A vX.Y.Z tag: the only versions that send."""
+    return bool(version and _SEMVER_RE.match(version))
 
 
 def env_off(environ=None):
@@ -716,6 +730,7 @@ class Recorder:
                 rec["off"] = True
                 d["pending"] = []   # days of an install that is off now
                 d.pop("notice", None)
+                d.pop("failing", None)
             if st is not None and self.ms is not None:
                 lines, d["history_mark"] = self.ms.history_since(
                     getattr(st, "overlay_doc", None), d.get("history_mark"))
@@ -731,7 +746,7 @@ class Recorder:
                 "ahead": self.ahead, "modified": self.modified,
                 "python": python_minor(), "os": os_family()}
             self._take_result(d, now)
-            forced = self._take_send_now()
+            forced = self._sending is None and self._take_send_now()
             if on and self.released() and endpoint(self.environ) \
                     and d["pending"] and self._sending is None \
                     and (forced or self._send_due(d, now)):
@@ -744,7 +759,7 @@ class Recorder:
     def released(self):
         """Only a release (a vX.Y.Z tag) sends: a dev
         checkout, an unreleased main or an unknown version never does."""
-        return bool(self.version and _SEMVER_RE.match(self.version))
+        return is_release(self.version)
 
     def _send_due(self, d, now):
         """One attempt per UTC day, after a random time within the first
@@ -762,7 +777,7 @@ class Recorder:
 
     def _start_send(self, d, now):
         tries = d.get("tries")
-        d["tries"] = tries + 1 if isinstance(tries, int) \
+        d["tries"] = max(0, tries) + 1 if isinstance(tries, int) \
             and d.get("last_attempt") == utc_day(now) else 1
         d["last_attempt"] = utc_day(now)
         d.pop("retry_after", None)
@@ -808,36 +823,45 @@ class Recorder:
                           "refused": len(dropped),
                           "ok": not d["pending"]}
         if reached:
-            d.pop("failing_since", None)
+            d.pop("failing", None)
             d.pop("notice", None)
         if d["pending"] and error:
             d["last_send"]["error"] = error
             tries = d.get("tries") if isinstance(d.get("tries"), int) else 1
-            d["retry_after"] = now + RETRY_SECS * 2 ** min(tries - 1, 5)
+            d["retry_after"] = now + RETRY_SECS * 2 ** min(max(tries, 1) - 1,
+                                                           5)
             at = datetime.fromtimestamp(d["retry_after"], timezone.utc)
             print(f"Telemetry: send failed ({error}); trying again after "
                   f"{at:%Y-%m-%d %H:%M} UTC.", flush=True)
         if d["pending"] and error and not reached:
-            since = d.get("failing_since")
-            if not _DAY_RE.match(str(since or "")):
-                d["failing_since"] = attempt
-            elif day_start(attempt) - day_start(since) \
-                    >= (NOTICE_AFTER_DAYS - 1) * 86400 \
+            # Unreachable on consecutive days: {since, last} (days).
+            f = d.get("failing") if isinstance(d.get("failing"), dict) \
+                else {}
+            since, last = day_secs(f.get("since")), day_secs(f.get("last"))
+            day = day_start(attempt)
+            if since is None or last is None or day - last > 86400 \
+                    or last < since:
+                since = day
+            d["failing"] = {"since": utc_day(since), "last": attempt}
+            if day - since >= (NOTICE_AFTER_DAYS - 1) * 86400 \
                     and d.get("notice") is None:
                 d["notice"] = "due"
         self._flush_locked()
 
     @_safe
-    def take_notice(self):
+    def take_notice(self, settings=None):
         """The owner DM about an unreachable endpoint, once (else None):
-        the monitor sends it."""
+        the monitor sends it. settings: as for tick."""
+        st = settings() if callable(settings) else settings
         with self.lock:
             d = self._load()
-            if d.get("notice") != "due":
+            if d.get("notice") != "due" or not enabled(st, self.environ):
                 return None
             d["notice"] = "sent"
             self._flush_locked()
-        return NOTICE_TEXT.format(days=NOTICE_AFTER_DAYS)
+        host = urllib.parse.urlsplit(endpoint(self.environ)).hostname
+        return NOTICE_TEXT.format(host=host or "the stats server",
+                                  days=NOTICE_AFTER_DAYS)
 
     def _take_send_now(self):
         """True (once) when `bin/telemetry.py send` asked for a send."""
