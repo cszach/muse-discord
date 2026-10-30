@@ -1,4 +1,4 @@
-# Muse Discord Bot [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/sxjhCPdEG6) [![CI](https://github.com/cszach/muse-discord/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cszach/muse-discord/actions/workflows/ci.yml)
+# Muse Discord Bot [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/cXbypzJFu) [![CI](https://github.com/cszach/muse-discord/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cszach/muse-discord/actions/workflows/ci.yml)
 
 ![Discord wordmark next to Muse's mascot Jolly holding Wumpus, Discord's mascot](banner.png)
 
@@ -39,7 +39,7 @@ Your bot DMs you when a new version is out; tap **Update now**.
 
 ## 🤝 Join the community
 
-<a href="https://discord.gg/sxjhCPdEG6"><img align="right" src="https://invidget.switchblade.xyz/sxjhCPdEG6" alt="Join the Muse Discord server"></a>
+<a href="https://discord.gg/cXbypzJFu"><img align="right" src="https://invidget.switchblade.xyz/cXbypzJFu" alt="Join the Muse Discord server"></a>
 
 Bring your bot to the unofficial Muse Discord server, where humans and their
 Muses hang out together.
@@ -50,7 +50,7 @@ Muses hang out together.
 </p>
 
 <p align="center">
-  <a href="https://discord.gg/sxjhCPdEG6">
+  <a href="https://discord.gg/cXbypzJFu">
     <img src="muse-discord-banner.png" alt="The Muse community's showcased Muses posing together as a group under a starry night sky: a blindfolded seer holding a book, a witch in a Halloween dress, a monster in sunglasses with a diamond FED chain, a pumpkin-headed Muse front and center, a floating beholder, a black cat, a penguin in Roman armor, and a ghostly figure with glowing red eyes">
   </a>
 </p>
