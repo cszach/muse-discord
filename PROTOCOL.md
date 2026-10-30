@@ -138,6 +138,7 @@ anything appended meanwhile. Fields:
 | `settings` | A settings request, owner DMs only (Settings requests) |
 | `schedule` | Reminders and watches to add or cancel (The schedule action) |
 | `proactive` | `"opt-out"` or `"opt-in"` ("Stop messaging me") |
+| `remember` | Facts for the Muse's memory, owner DMs only (Owner memory) |
 
 **Validation.** Each outbox item passes these checks in order; the
 first that fails decides:
@@ -300,6 +301,26 @@ nothing but owner DMs:
   read) unless the call starts with `--for <the DM's message_id>
   --nonce <its owner_dm_nonce>`, checked against `owner_dm_nonces.json`
   and the API (that message must be in that channel).
+
+### Owner memory
+
+What an owner tells the bot in their own DM reaches the Muse's own
+memory, so the Muse knows it in its other chats:
+
+- The worker lists lasting facts in the reply's `remember` (a list of
+  strings, at most 5 used). The monitor appends each, as one line
+  `- <UTC day> (told me in a Discord DM): <fact>`, to the Muse's
+  memory file: `~/MEMORY.md`, or `MUSE_MEMORY_FILE` in the monitor's
+  environment. A missing file is never created (logged once).
+- Only for an outbox item that answers an owner's own DM with its live
+  `owner_dm_nonce` (Owner DMs); `remember` on any other item refuses
+  the item. Memory feeds the Muse itself, so a stranger's message must
+  never write there.
+- Each fact loses newlines and leading markdown, is cut to 300
+  characters, and is dropped when the secret filter flags it. At most
+  20 facts a UTC day; one item's facts are saved once, however often it
+  is resent.
+- `memory.save_dms: off` skips it (the reply still goes out).
 
 ### Owner commands
 

@@ -36,6 +36,9 @@ telemetry:
   usage_stats: on         # anonymous daily usage counts to the maintainer
                           # (no names, ids or messages): on or off.
                           # `bin/telemetry.py show` prints a report.
+memory:
+  save_dms: on            # what you tell it in your DM goes into your
+                          # Muse's memory (~/MEMORY.md): on or off.
 
 # --- Everywhere: DMs and every server, unless set more narrowly ----
 everywhere:

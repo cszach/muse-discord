@@ -286,9 +286,13 @@ TOP = {
     "updates.notify": Spec("on-off", True, "E"),
     # Anonymous daily usage counts to the maintainer (telemetry.py).
     "telemetry.usage_stats": Spec("on-off", True, "E"),
+    # What an owner tells the bot in their DM, added to the Muse's own
+    # memory file (monitor.py, remember_facts).
+    "memory.save_dms": Spec("on-off", True, "E"),
 }
 TOP_DISCORD_EDITABLE = ("presence.status", "presence.kind",
-                        "updates.notify", "telemetry.usage_stats")
+                        "updates.notify", "telemetry.usage_stats",
+                        "memory.save_dms")
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +591,7 @@ def parse_key(s):
     if not parts or any(p == "" for p in parts):
         raise ValueError("empty key part")
     head = parts[0]
-    if head in ("presence", "updates", "telemetry"):
+    if head in ("presence", "updates", "telemetry", "memory"):
         return ("top",), ".".join(parts)
     if head in ("everywhere", "dms", "all_servers"):
         return (head,), _canon(parts[1:], False)
@@ -1769,7 +1773,8 @@ def load(config_path, plugins_dir=None, overlay_path=None,
 
 def _parse_new(p, data, aliases, st):
     allowed = {"version", "owners", "persona", "token_from", "presence",
-               "updates", "telemetry", "everywhere", "dms", "all_servers",
+               "updates", "telemetry", "memory", "everywhere", "dms",
+               "all_servers",
                "servers", "engine", "testing"}
     for k in data:
         if k not in allowed:
@@ -1810,7 +1815,8 @@ def _parse_new(p, data, aliases, st):
                 if isinstance(tf, list) else tf.strip()
     for sect, keys in (("presence", ("status", "kind", "enabled")),
                        ("updates", ("notify",)),
-                       ("telemetry", ("usage_stats",))):
+                       ("telemetry", ("usage_stats",)),
+                       ("memory", ("save_dms",))):
         block = data.get(sect)
         if block is None:
             continue
@@ -2592,7 +2598,8 @@ def build_migrated(config_path, plugins_dir=None, state_path=None):
         name = block.pop("name", None) or known.get(gid)
         servers[gid] = ({"name": name} if name else {}) | block
     order = ["version", "owners", "persona", "token_from", "presence",
-             "updates", "telemetry", "everywhere", "dms", "all_servers",
+             "updates", "telemetry", "memory", "everywhere", "dms",
+             "all_servers",
              "servers", "engine", "testing"]
     data["version"] = 1
     out = {k: data[k] for k in order if k in data}
@@ -3016,6 +3023,7 @@ LABELS = {
     "presence.kind": "Status kind",
     "updates.notify": "Update notices",
     "telemetry.usage_stats": "Anonymous usage stats",
+    "memory.save_dms": "Save what you tell it in DMs to your Muse's memory",
 }
 VALUE_LABELS = {
     ("who.replies", "conversational"): "Chatty",
