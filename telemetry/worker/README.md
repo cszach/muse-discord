@@ -1,8 +1,8 @@
 # muse-discord usage stats Worker
 
 A Cloudflare Worker with a D1 database that receives the anonymous
-daily reports `telemetry.py` sends (README.md, "Privacy and usage
-stats", lists every field). Only the maintainer deploys it.
+daily reports `telemetry.py` sends (its `build_payload` makes every
+field). Only the maintainer deploys it.
 
 | Route | What it does |
 | --- | --- |

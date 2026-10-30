@@ -47,6 +47,7 @@ telemetry.json
 telemetry_id
 telemetry.wakes
 telemetry.wakes.taking
+telemetry.send_now
 
 # Logs (the previous run's log is kept as <name>.log.1)
 *.log

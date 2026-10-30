@@ -2273,6 +2273,14 @@ def announce_update(state):
         upd["owed"] = []
 
 
+def telemetry_notice():
+    """DM the owners once when usage stats have not reached their
+    endpoint for days (telemetry.py, take_notice)."""
+    text = TM.take_notice()
+    if text:
+        notify_owners(text)
+
+
 def apply_record(state, rec):
     """Main-loop side of an interaction: persist what the interaction
     thread decided (it never writes state.json itself)."""
@@ -8895,6 +8903,7 @@ def main():
             if cycle_done:
                 flush_join_notices(state, GUILDS, CHANNELS)
                 announce_update(state)
+                telemetry_notice()
                 expire_holds(state)
                 sweep_media()
                 sweep_generated()

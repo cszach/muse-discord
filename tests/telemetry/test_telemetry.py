@@ -365,23 +365,71 @@ class BadEndpoint(Base):
         self.assertEqual(len(ep.reports), 1)
         self.assertEqual(len(self.pending()), 1)   # kept for tomorrow
 
-    def test_failing_endpoint_retries_next_day_only(self):
+    def test_failing_endpoint_retries_later_with_backoff(self):
         ep = self.serve("fail")
         self.tick()
         self.next_day()
         self.wait_send()
         self.assertEqual(len(ep.reports), 1)
-        for _ in range(5):
-            self.clock.t += 600
+        self.assertEqual(self.tm.data["last_send"]["error"], "HTTP 500")
+
+        def after(secs):
+            self.clock.t += secs
             self.tick()
-        self.wait_send()
-        self.assertEqual(len(ep.reports), 1)       # no retry storm
+            self.wait_send()
+            return len(ep.reports)
+        self.assertEqual(after(3000), 1)           # no retry storm
+        self.assertEqual(after(700), 2)            # an hour after
+        self.assertEqual(after(3700), 2)           # then two hours
+        self.assertEqual(after(3600), 3)
         self.assertEqual(len(self.pending()), 1)
         ep.mode = "ok"
         self.next_day()
         self.wait_send()
-        self.assertEqual(len(ep.reports), 3)       # both waiting days
+        self.assertEqual(len(ep.reports), 5)       # both waiting days
         self.assertEqual(self.pending(), [])
+
+    def test_unreachable_days_tell_the_owners_once(self):
+        self.tm.environ = {T.ENV_URL: "http://127.0.0.1:9"}
+        self.tick()
+        notices = []
+        for _ in range(T.NOTICE_AFTER_DAYS + 2):
+            self.next_day()
+            self.wait_send()
+            with quiet():
+                notices.append(self.tm.take_notice())
+        self.assertEqual([bool(n) for n in notices],
+                         [False] * (T.NOTICE_AFTER_DAYS - 1)
+                         + [True, False, False])
+        # Reaching the endpoint again (even refused) re-arms it.
+        self.serve("fail")
+        self.next_day()
+        self.wait_send()
+        self.assertNotIn("failing_since", self.tm.data)
+        self.assertNotIn("notice", self.tm.data)
+
+    def test_send_asked_for_by_the_cli(self):
+        ep = self.serve("fail")
+        self.tick()
+        self.next_day()
+        self.wait_send()
+        self.assertEqual(len(ep.reports), 1)
+        ep.mode = "ok"
+        flag = os.path.join(os.path.dirname(self.m.TELEMETRY_FILE),
+                            T.SEND_NOW_FILE)
+        open(flag, "w").close()
+        self.tick()          # long before the retry is due
+        self.wait_send()
+        self.assertEqual(len(ep.reports), 2)
+        self.assertEqual(self.pending(), [])
+        self.assertFalse(os.path.exists(flag))
+
+    def test_failure_reason_never_logs_a_proxy_password(self):
+        import urllib.error
+        e = urllib.error.URLError(
+            "Tunnel connection failed: http://user:s3cret@proxy:3128")
+        self.assertNotIn("s3cret", T.failure_reason(e))
+        self.assertIn("Tunnel connection failed", T.failure_reason(e))
 
     def test_unreachable_endpoint_and_bad_files(self):
         self.tm.environ = {T.ENV_URL: "http://127.0.0.1:9"}
