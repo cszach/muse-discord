@@ -106,7 +106,7 @@ def cmd_status(args):
         retry = d.get("retry_after")
         if last.get("ok"):
             then = ""
-        elif isinstance(retry, (int, float)) \
+        elif isinstance(retry, (int, float)) and abs(retry) < 1e11 \
                 and d.get("last_attempt") == T.utc_day():
             at = datetime.fromtimestamp(retry, timezone.utc)
             then = f"; the rest is retried after {at:%H:%M} UTC"
@@ -167,6 +167,14 @@ def cmd_send(args):
                if isinstance(p, dict)]
     if why:
         print(f"Usage stats are {why}: nothing is sent.")
+        return 1
+    if not T.endpoint():
+        print("No endpoint is configured: nothing is sent.")
+        return 1
+    version = T.installed_version(PKG)
+    if not T.is_release(version):
+        print(f"This copy ({version or 'unknown version'}) is not a "
+              f"release: only releases send.")
         return 1
     if not pending:
         print("Nothing is waiting to be sent.")

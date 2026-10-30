@@ -34,8 +34,8 @@ updates:
   notify: on              # DM you when a new version is out: on or off
 telemetry:
   usage_stats: on         # anonymous daily usage counts to the maintainer
-                          # (no names, ids or messages): on or off. See
-                          # README, "Privacy and usage stats".
+                          # (no names, ids or messages): on or off.
+                          # `bin/telemetry.py show` prints a report.
 
 # --- Everywhere: DMs and every server, unless set more narrowly ----
 everywhere:
