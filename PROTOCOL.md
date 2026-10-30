@@ -308,18 +308,26 @@ What an owner tells the bot in their own DM reaches the Muse's own
 memory, so the Muse knows it in its other chats:
 
 - The worker lists lasting facts in the reply's `remember` (a list of
-  strings, at most 5 used). The monitor appends each, as one line
-  `- <UTC day> (told me in a Discord DM): <fact>`, to the Muse's
-  memory file: `~/MEMORY.md`, or `MUSE_MEMORY_FILE` in the monitor's
-  environment. A missing file is never created (logged once).
+  strings, at most 5 used). Once the reply is sent (or settled as
+  silent), the monitor appends each, as one line `- <UTC day> (told me
+  in a Discord DM): <fact>`, to the Muse's memory file: `~/MEMORY.md`
+  of the user the monitor runs as (on Muse, the Muse's own), or
+  `MUSE_MEMORY_FILE` in the monitor's environment. A missing file is
+  never created (logged once).
 - Only for an outbox item that answers an owner's own DM with its live
   `owner_dm_nonce` (Owner DMs); `remember` on any other item refuses
   the item. Memory feeds the Muse itself, so a stranger's message must
   never write there.
-- Each fact loses newlines and leading markdown, is cut to 300
-  characters, and is dropped when the secret filter flags it. At most
-  20 facts a UTC day; one item's facts are saved once, however often it
-  is resent.
+- Skipped (logged; the reply still goes out) unless the DM is the
+  owner's own words: never for a reminder or watch notice (a fire's
+  answer drops `remember`), a forwarded message, one with attachments
+  or a reply to another message, an author who is no longer an owner,
+  a settings request, or a reply whose reminder or watch was refused.
+- Each fact loses newlines and leading markdown and is cut to 300
+  characters; one the secret filter flags (the bot token, a live
+  nonce, a Discord-shaped token; other secrets are the worker's to
+  leave out) is dropped. At most 20 facts a UTC day; one DM's facts
+  are saved once, however often the reply is resent.
 - `memory.save_dms: off` skips it (the reply still goes out).
 
 ### Owner commands

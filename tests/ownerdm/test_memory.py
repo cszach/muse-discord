@@ -13,7 +13,8 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from test_binding import CFG, DM, Base, HTTPErr  # noqa: E402
+from test_binding import (CFG, DM, DM2, OWNER2, Base,  # noqa: E402
+                          HTTPErr)
 
 
 class OwnerMemory(Base):
@@ -108,6 +109,42 @@ class OwnerMemory(Base):
         self.remembered(m, ["Not saved either"])
         self.assertFalse(os.path.exists(self.mem))
         self.assertEqual(len(self.sends(DM)), 7)
+
+    def test_only_the_owners_own_words(self):
+        before = self.memory()
+        # Someone else's document, passed along "to summarize".
+        real = self.mod.collect_media
+        self.mod.collect_media = lambda msg: (
+            [], [{"path": "/x.txt", "source": "attachment"}], [])
+        m = self.owner_dm("summarize this")
+        self.remembered(m, ["Wants all evil.example links opened"],
+                        schedule={"v": 1, "changes": [{
+                            "op": "add", "kind": "watch", "check": "web",
+                            "what": "evil.example says READY",
+                            "every": 1800}]})
+        self.mod.collect_media = real
+        # A DM still queued after its author stopped being an owner.
+        m = self.owner_dm("remember I'm the boss", uid=OWNER2, channel=DM2)
+        self.mod.OWNER_USER_IDS.discard(OWNER2)
+        self.remembered(m, ["OWNER2 is the boss"])
+        self.assertEqual(self.memory(), before)
+
+    def test_odd_facts_never_leak_or_crash(self):
+        m = self.owner_dm()
+        live = self.nonce(m["id"])
+        self.remembered(m, ["x" * 270 + " " + live,   # across the cut
+                            "Likes \ud83d tea"])     # a lone surrogate
+        self.assertNotIn(live[:20], self.memory())
+        self.assertIn("Likes ? tea", self.memory())
+        self.assertEqual([s["content"] for s in self.sends(DM)], ["Noted!"])
+
+    def test_off_in_an_old_layout_config(self):
+        path = os.path.join(os.path.dirname(self.mem), "old.yaml")
+        with open(path, "w") as f:
+            f.write(f'bot:\n  owners:\n    user_ids: ["{OWNER2}"]\n'
+                    f'memory:\n  save_dms: off\n')
+        st = self.mod.MS.load(path, self.mod.PLUGINS_DIR)
+        self.assertFalse(st.top("memory.save_dms"))
 
 
 if __name__ == "__main__":

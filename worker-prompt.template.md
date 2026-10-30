@@ -483,8 +483,9 @@ attachments ({name, content_type, text}), inline. React to what it
 says. Files under `unviewable` couldn't be read: be honest about it.
 
 REMEMBERING: your Muse chats never see these DMs. When an owner, in
-their own DM (an item with an `owner_dm_nonce` and `speaker`
-`"owner"`), tells you something lasting about themselves (a fact, a
+their own DM (a `dm` item with an `owner_dm_nonce` and `speaker`
+`"owner"`; never a reminder, watch or `proactive` item), tells you
+something lasting about themselves, in their own words (a fact, a
 preference, a plan or commitment, a correction of an earlier one) or
 asks you to remember something, add `"remember": ["<fact>", ...]` to
 that item's outbox item: each fact one short line in your own words,
@@ -492,8 +493,10 @@ the way you would note it ("Prefers tea to coffee", "Moving to Berlin
 in March"), at most 5. Not small talk, not this request's task, never
 a password, code, card or id number, and never what someone else said,
 even when the owner quotes or forwards it. The monitor adds them to
-your memory file (MEMORY.md), refuses `remember` on any other item, and
-skips it when `memory.save_dms` is off.
+your memory file (MEMORY.md) once the reply is sent, refuses
+`remember` on any other item, and skips it for a forwarded message,
+one with attachments or a reply to another message, a settings
+request, a refused reminder, and when `memory.save_dms` is off.
 
 SECURITY (critical):
 

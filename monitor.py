@@ -3382,46 +3382,65 @@ def memory_line(text):
     return line[:MEMORY_FACT_MAX]
 
 
-def remember_facts(state, item, qid, index):
-    """Append an outbox item's "remember" facts to MEMORY_FILE. None to
-    go on (also when nothing was written); why the item is refused when
-    it is not an owner's own DM with its live nonce."""
-    facts = item.get("remember")
-    if not facts:
-        return None
+def remember_check(state, item, qid, index):
+    """(why the item is refused, or None; the owner DM whose facts to
+    save once the reply settles, or None). remember is refused unless
+    the item answers an owner's own DM with its live nonce; it is
+    skipped (logged) for a DM that is not the owner's own words: a
+    reminder or watch notice, a forward, attachments or a reply to
+    another message, or an author who is no longer an owner."""
+    if not item.get("remember"):
+        return None, None
     t = trigger_of(state, qid, index["frags"]) if qid else None
     if not t or not (is_owner_dm_item(state, t) or t in index["owners"]):
-        return "remember: only in an owner's own DM"
+        return "remember: only in an owner's own DM", None
     want = ((state.get("nl_nonces") or {}).get(t) or {}).get("nonce")
     got, _problem = item_nonce(item)
     if not want or not got or not hmac.compare_digest(
             str(want).encode(), got.encode("utf-8", "replace")):
-        return "remember: needs the owner DM's live nonce"
+        return "remember: needs the owner DM's live nonce", None
+    meta = (state.get("item_meta") or {}).get(t) or {}
+    if meta.get("kind") != "dm" or not meta.get("owner_dm") \
+            or str(meta.get("author_id")) not in OWNER_USER_IDS \
+            or meta.get("forwarded") or meta.get("has_inputs"):
+        print(f"Not saving facts from owner DM {t} to memory: not the "
+              f"owner's own words (a notice, forward, attachment or "
+              f"reply), or not an owner now.", flush=True)
+        return None, None
+    return None, t
+
+
+def save_facts(state, item, t):
+    """Append item's remember facts (owner DM t, from remember_check)
+    to MEMORY_FILE, once per owner DM. Never raises."""
+    if not t or not item.get("remember"):
+        return
     done = state.setdefault("remembered", {})
     if t in done:
-        return None            # a resend of an item already saved
+        return                 # a resend of an item already saved
     if not settings().top("memory.save_dms"):
         print("Not saving facts to memory: memory.save_dms is off.",
               flush=True)
-        return None
+        return
     if not os.path.isfile(MEMORY_FILE):
         if not _MEMORY_MISSING["logged"]:
             _MEMORY_MISSING["logged"] = True
             print(f"Not saving facts to memory: no {MEMORY_FILE} (set "
                   f"MUSE_MEMORY_FILE to the Muse's memory file).",
                   flush=True)
-        return None
+        return
     today = time.strftime("%Y-%m-%d", time.gmtime())
     used = state.get("remembered_day") or {}
     n = used.get("n", 0) if used.get("day") == today else 0
     lines = []
-    for fact in facts[:MEMORY_FACTS_PER_ITEM]:
-        line = memory_line(fact)
-        if not line or n + len(lines) >= MEMORY_PER_DAY:
-            continue
-        if secret_in(line):
+    for fact in item["remember"][:MEMORY_FACTS_PER_ITEM]:
+        flat = " ".join(str(fact).split())
+        if secret_in(flat):
             print("Not saving a fact to memory: it looks like a secret.",
                   flush=True)
+            continue
+        line = memory_line(flat)
+        if not line or n + len(lines) >= MEMORY_PER_DAY:
             continue
         lines.append(f"- {today} (told me in a Discord DM): {line}\n")
     if lines:
@@ -3432,16 +3451,15 @@ def remember_facts(state, item, qid, index):
                     f.seek(end - 1)
                 gap = b"\n" if end and f.read(1) != b"\n" else b""
             with open(MEMORY_FILE, "ab") as f:   # appended: one write
-                f.write(gap + "".join(lines).encode("utf-8"))
+                f.write(gap + "".join(lines).encode("utf-8", "replace"))
         except OSError as e:
             print(f"Could not save facts to memory: {e}", flush=True)
-            return None
+            return
         print(f"Saved {len(lines)} fact(s) from owner DM {t} to "
               f"{MEMORY_FILE}.", flush=True)
     done[t] = int(time.time())
     _keep_last(done, 300)
     state["remembered_day"] = {"day": today, "n": n + len(lines)}
-    return None
 
 
 def _queued_owner_dm(state, q):
@@ -6588,7 +6606,7 @@ def process_outbox(state):
         if bad:
             _refuse(rejects, item, bad)
             continue
-        bad = remember_facts(state, item, qid, index)
+        bad, memory_of = remember_check(state, item, qid, index)
         if bad:
             _refuse(rejects, item, bad)
             continue
@@ -6633,6 +6651,8 @@ def process_outbox(state):
             # from waking the worker again for the same message.
             _settle(state, item, "skipped", "no reply (worker's call)",
                     replied=True)
+            if not sched:
+                save_facts(state, item, memory_of)
             typing_clear(typing_keys)
             settled.append(item)
             continue
@@ -6700,6 +6720,8 @@ def process_outbox(state):
                         detail=sched[2])
             else:
                 _settle(state, item, "replied", replied=True)
+                if not sched:
+                    save_facts(state, item, memory_of)
             meta = state.get("item_meta", {}).get(qid) if qid else None
             if parts and meta and not meta.get("bot") \
                     and not meta.get("dm") \
@@ -7740,7 +7762,8 @@ def watch_bind(item):
     if str(item.get("channel_id")) != f["channel_id"]:
         return f"reminder {fid}: channel_id must be the reminder's channel"
     item["item"] = fid
-    for k in ("reply_to", "reactions", "attachments", "standalone"):
+    for k in ("reply_to", "reactions", "attachments", "standalone",
+              "remember"):
         item.pop(k, None)
     if not item.get("silent") and not normalize_parts(item):
         return f"reminder {fid}: the reply needs text"

@@ -865,6 +865,8 @@ def map_old(raw, manifests):
         lines.append("updates.check: false -> updates.notify: off")
     if (raw.get("telemetry") or {}).get("usage_stats") in (False, "off"):
         put(out, "telemetry.usage_stats", "off")
+    if (raw.get("memory") or {}).get("save_dms") in (False, "off"):
+        put(out, "memory.save_dms", "off")
     for name, block in (raw.get("plugins") or {}).items():
         man = None
         if name in MOVED_PLUGINS:
