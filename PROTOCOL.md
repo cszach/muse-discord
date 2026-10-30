@@ -1260,10 +1260,11 @@ their channels (id, name, type, parent, `readable`, `can_send`), for
 `bin/settings.py`.
 
 `telemetry.json`, `telemetry_id`, `telemetry.wakes`: the anonymous
-daily usage counts (`telemetry.py`; README, "Privacy and usage
-stats"). The wake hook appends a line to `telemetry.wakes` per wake
-once `telemetry.json` exists; another runtime may too (else wakes count
-0).
+daily usage counts (`telemetry.py`; `bin/telemetry.py show` prints the
+next report). The wake hook appends a line to `telemetry.wakes` per
+wake once `telemetry.json` exists; another runtime may too (else wakes
+count 0). `telemetry.send_now`, written by `bin/telemetry.py send`,
+asks the monitor to send the waiting days at once.
 
 ### never_share holds
 
